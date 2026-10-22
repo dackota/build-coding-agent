@@ -20,6 +20,7 @@ import { type AskUserPause, loadSession, saveSession, type SessionState, type To
 import { openMcpTools } from "./mcp-tools.ts";
 import { type ApprovalGate, createShellTool, SHELL_TOOL } from "./shell-tool.ts";
 import { createTaskTool } from "./subagents.ts";
+import { createToolRegistry, type ToolRegistry, type TurnContext } from "./tool-registry.ts";
 import { EVENT_KEY, type StreamEvent } from "./stream-events.ts";
 import { ChangeTracker } from "./workspace-diff.ts";
 
@@ -64,6 +65,10 @@ const textPart = (value: string, mediaType = "text/plain") => ({
   filename: "",
   mediaType,
 });
+
+const LOAD_SKILL_TOOL = "load_skill";
+const TASK_TOOL = "task";
+const FILE_TOOLS = ["read_file", "write_file", "edit_file", "search"] as const;
 
 const askUserTool = tool({
   description: `Ask the user one or more structured questions and wait for the answers. Returns one answer list per question, in order.
@@ -133,6 +138,29 @@ type TurnIds = { taskId: string; contextId: string };
 const isPausingStep = (step: Pick<TurnResult, "content" | "toolCalls">): boolean =>
   step.toolCalls.some((c) => c?.toolName === ASK_USER) || step.content.some((p) => p.type === "tool-approval-request");
 
+/** The file tools built earlier this turn, by name. */
+function builtFileTools(ctx: TurnContext): Record<string, Tool> {
+  const out: Record<string, Tool> = {};
+  for (const name of FILE_TOOLS) {
+    const built = ctx.built(name);
+    if (built) out[name] = built;
+  }
+  return out;
+}
+
+/** The built-in tools, once per executor, in the order the system prompt lists them. */
+function registerBuiltins(registry: ToolRegistry, config: AgentConfig, opts: ExecutorOptions): void {
+  for (const name of FILE_TOOLS) registry.register(name, (ctx) => createFileTools(ctx.sandbox, ctx.changes)[name]);
+  registry.register(SHELL_TOOL, (ctx) => createShellTool(ctx.sandbox, ctx.gate));
+  registry.register(ASK_USER, () => askUserTool);
+  registry.register(TODO_TOOL, (ctx) => createTodoTool(ctx.todos));
+  registry.register(LOAD_SKILL_TOOL, (ctx) => (ctx.skills.length > 0 ? createSkillTool(ctx.skills, ctx.taskId) : undefined));
+  registry.register(TASK_TOOL, (ctx) => {
+    if (config.subAgents.length === 0) return undefined;
+    return createTaskTool(config.subAgents, { fileTools: builtFileTools(ctx), taskId: ctx.taskId, opts });
+  });
+}
+
 /**
  * Runs each message through a tool loop (file tools and the shell on the context's Sandbox,
  * ask_user, and the tools of the config's MCP bindings) with the model behind the gateway, and replies as an A2A Task: the model's
@@ -149,6 +177,8 @@ export function createExecutor(
   mcpBindings: readonly McpBinding[] = [],
 ): AgentExecutor & { shutdown(): Promise<void> } {
   const model = gatewayModel(config.baseUrl, config.model);
+  const registry = createToolRegistry();
+  registerBuiltins(registry, config, opts);
   const sandboxes = new Map<string, Promise<Sandbox>>();
   /** The running turn of each task, so CancelTask can stop it. */
   const running = new Map<string, { abort: AbortController; contextId: string }>();
@@ -257,19 +287,7 @@ export function createExecutor(
     mcpTools: Record<string, Tool>,
   ): Promise<TurnResult> {
     const { taskId, contextId } = ctx;
-    const tools = capTools(
-      {
-        // Built-in tools win a name clash with an MCP tool.
-        ...mcpTools,
-        ...createFileTools(sandbox, turn.changes),
-        [SHELL_TOOL]: createShellTool(sandbox, gate),
-        [ASK_USER]: askUserTool,
-        [TODO_TOOL]: createTodoTool(todos),
-        ...(skills.length > 0 ? { load_skill: createSkillTool(skills, taskId) } : {}),
-        ...(config.subAgents.length > 0 ? { task: createTaskTool(config.subAgents, { sandbox, changes: turn.changes, taskId, opts }) } : {}),
-      },
-      opts.maxToolOutputChars,
-    );
+    const tools = capTools(registry.build({ sandbox, changes: turn.changes, taskId, skills, gate, todos }, mcpTools), opts.maxToolOutputChars);
     const instructions = await turnInstructions(sandbox, taskId, tools, workspaceDir(dataDir, contextId), skills, todos.list);
     const agent = new ToolLoopAgent({ model, instructions, tools, stopWhen: stepCountIs(opts.maxSteps) });
     let stepNumber = 0;

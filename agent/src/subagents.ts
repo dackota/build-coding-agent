@@ -6,25 +6,22 @@ import { stepCountIs, type Tool, tool, ToolLoopAgent } from "ai";
 import { z } from "zod";
 import type { SubAgentDef } from "./config.ts";
 import { capOutput, capTools, logStepUsage } from "./context.ts";
-import { createFileTools } from "./file-tools.ts";
 import { gatewayModel } from "./gateway.ts";
 import { log } from "./log.ts";
-import type { Sandbox } from "./sandbox.ts";
-import type { ChangeTracker } from "./workspace-diff.ts";
 
 /** The tools a subagent may use. The template carries no tool list, so the role is by name; anything but the executor is read-only. */
 const READ_ONLY_TOOLS = ["read_file", "search"];
 const FULL_TOOLS_AGENT = "executor";
 
 export type TaskToolDeps = {
-  sandbox: Sandbox;
-  changes: ChangeTracker;
+  /** The turn's built file tools, as the registry made them. */
+  fileTools: Record<string, Tool>;
   taskId: string;
   opts: { maxSteps: number; maxToolOutputChars: number };
 };
 
 function toolsFor(def: SubAgentDef, deps: TaskToolDeps) {
-  const all = createFileTools(deps.sandbox, deps.changes);
+  const all = deps.fileTools;
   const allowed = def.name === FULL_TOOLS_AGENT ? all : Object.fromEntries(Object.entries(all).filter(([name]) => READ_ONLY_TOOLS.includes(name)));
   return capTools(allowed, deps.opts.maxToolOutputChars);
 }
