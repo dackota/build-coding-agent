@@ -5,6 +5,8 @@ import { type ExecResult, OutsideWorkspaceError, relativeInWorkspace, type Sandb
 
 export const EXEC_TIMEOUT_MS = 60_000;
 const EXEC_MAX_BUFFER = 1024 * 1024;
+// A command has no terminal: git must fail on a repo that wants a login, not wait for a prompt.
+const EXEC_ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
 
 const isInside = (root: string, path: string) => path === root || path.startsWith(root + sep);
 
@@ -44,7 +46,7 @@ export async function createLocalSandbox(root: string, opts: { execTimeoutMs?: n
     },
     exec(command) {
       return new Promise<ExecResult>((done) => {
-        execFile("/bin/sh", ["-c", command], { cwd: realRoot, timeout: execTimeoutMs, maxBuffer: EXEC_MAX_BUFFER }, (err, stdout, stderr) => {
+        execFile("/bin/sh", ["-c", command], { cwd: realRoot, env: EXEC_ENV, timeout: execTimeoutMs, maxBuffer: EXEC_MAX_BUFFER }, (err, stdout, stderr) => {
           const code = err ? (typeof err.code === "number" ? err.code : 1) : 0;
           done({ stdout, stderr, exitCode: code, ...(err?.killed ? { hasTimedOut: true } : {}) });
         });

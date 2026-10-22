@@ -88,3 +88,5 @@ spec:
   template:
     ref: {name: hello-agent}
   harnessRef: {name: hello-harness}
+  # git over HTTPS and the npm registry, by DNS name (platform/egress.yaml).
+  egressPolicyRefs: [{name: agent-git-egress}]

@@ -1,0 +1,11 @@
+# Lets the agent's actor reach the hosts a clone-and-test task needs: git over HTTPS and the
+# npm registry. Hosts by DNS name, no authentication: the actor holds no git credential, so
+# only public repos can be cloned. Applied by deploy.sh.
+apiVersion: api.kagent.dev/v1alpha3
+kind: EgressPolicy
+metadata: {name: agent-git-egress, namespace: kagent}
+spec:
+  destinations:
+    - origin: https://github.com
+    - origin: https://codeload.github.com
+    - origin: https://registry.npmjs.org

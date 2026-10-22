@@ -80,6 +80,14 @@ describe("buildSystemPrompt", () => {
     expect(buildSystemPrompt(base)).not.toMatch(/do not guess/i);
   });
 
+  it("tells the model to clone public repos over HTTPS by DNS name with no credentials when bash is a tool", () => {
+    const prompt = buildSystemPrompt({ ...base, toolNames: ["a_tool", "bash"] });
+    expect(prompt).toMatch(/git clone/);
+    expect(prompt).toMatch(/https:\/\/github\.com/);
+    expect(prompt).toMatch(/no git credentials/i);
+    expect(buildSystemPrompt(base)).not.toMatch(/git clone/);
+  });
+
   it("keeps AGENTS.md whole, however large", () => {
     const big = `${"x".repeat(200_000)}END`;
     expect(buildSystemPrompt({ ...base, agentsMd: big })).toContain(big);

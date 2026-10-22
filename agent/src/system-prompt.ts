@@ -1,3 +1,4 @@
+import { SHELL_TOOL } from "./shell-tool.ts";
 import type { Todo } from "./session-state.ts";
 import { formatTodos, TODO_TOOL } from "./todo-tool.ts";
 
@@ -41,6 +42,11 @@ const VERIFICATION_CONTRACT = [
   "In your final answer, say which of the four you ran and whether it passed. If one does not exist, or you have no tool to run it, say so; never claim a check you did not run.",
 ].join("\n");
 
+const GIT_RULE = [
+  "Git: to work on a public repo, run `git clone --depth 1 https://github.com/<owner>/<repo>.git` in the workspace, then run its tests there.",
+  "Always clone over HTTPS by DNS name (like https://github.com/...), never by IP address. There are no git credentials here: never put a token or password in a URL, and only public repos can be cloned.",
+].join("\n");
+
 /** The system prompt: the config's instruction, runtime facts, the verification contract, then the project's AGENTS.md. */
 export function buildSystemPrompt(facts: PromptFacts): string {
   const sections: string[] = [];
@@ -54,6 +60,7 @@ export function buildSystemPrompt(facts: PromptFacts): string {
     ].join("\n"),
   );
   if (facts.toolNames.includes(ASK_USER_TOOL)) sections.push(AMBIGUITY_RULE);
+  if (facts.toolNames.includes(SHELL_TOOL)) sections.push(GIT_RULE);
   sections.push(SEARCH_FIRST_RULE);
   if (facts.todos && facts.todos.length > 0) sections.push(`Current todo list:\n${formatTodos(facts.todos)}`);
   sections.push(VERIFICATION_CONTRACT);
