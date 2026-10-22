@@ -13,13 +13,35 @@ import { askUserMessage, parseAskUserResponse, parseToolApprovalResponse, type Q
 import { createLocalSandbox } from "./local-sandbox.ts";
 import { log } from "./log.ts";
 import { createSkillTool, discoverSkills, type Skill } from "./skills.ts";
-import { readIfExists, type Sandbox } from "./sandbox.ts";
+import { readIfExists, type Sandbox, type SandboxHooks, withHooks } from "./sandbox.ts";
 import { AGENTS_MD_FILE, buildSystemPrompt } from "./system-prompt.ts";
 import { type AskUserPause, loadSession, saveSession, type SessionState, type ToolApprovalPause, workspaceDir } from "./session-state.ts";
 import { createShellTool, SHELL_TOOL } from "./shell-tool.ts";
 import { ChangeTracker } from "./workspace-diff.ts";
 
 const ASK_USER = "ask_user";
+const LOG_FIELD_MAX_CHARS = 200;
+
+/** The lifecycle hooks of one session's sandbox: each writes a log line the actor's log carries. */
+function hooksFor(contextId: string): SandboxHooks {
+  return {
+    afterStart: () => log("afterStart", { contextId }),
+    beforeStop: () => log("beforeStop", { contextId }),
+    onTimeout: (command) => log("onTimeout", { contextId, command: command.slice(0, LOG_FIELD_MAX_CHARS) }),
+  };
+}
+
+/** Stops each started sandbox; one whose start failed is logged and skipped, never a reason to leave the rest running. */
+async function stopAll(started: Promise<Sandbox>[]): Promise<void> {
+  await Promise.all(
+    started.map((s) =>
+      s.then(
+        (sandbox) => sandbox.stop(),
+        (err: Error) => log("shutdown-skipped", { message: err.message }),
+      ),
+    ),
+  );
+}
 
 export type SandboxKind = "local" | "memory";
 export type ExecutorOptions = {
@@ -114,7 +136,7 @@ const isPausingStep = (step: Pick<TurnResult, "content" | "toolCalls">): boolean
  * INPUT_REQUIRED (kagent HITL extension: ask_user_request or tool_approval_request) and the
  * pending pause is saved in the session state, so a cold start can finish it.
  */
-export function createExecutor(config: AgentConfig, dataDir: string, opts: ExecutorOptions): AgentExecutor {
+export function createExecutor(config: AgentConfig, dataDir: string, opts: ExecutorOptions): AgentExecutor & { shutdown(): Promise<void> } {
   const model = createOpenAICompatible({ name: "gateway", baseURL: config.baseUrl }).chatModel(config.model);
   const sandboxes = new Map<string, Promise<Sandbox>>();
 
@@ -122,7 +144,8 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
     let sandbox = sandboxes.get(contextId);
     if (!sandbox) {
       const root = workspaceDir(dataDir, contextId);
-      sandbox = opts.sandbox === "memory" ? import("./memory-sandbox.ts").then((m) => m.createMemorySandbox(root)) : createLocalSandbox(root);
+      const inner = opts.sandbox === "memory" ? import("./memory-sandbox.ts").then((m) => m.createMemorySandbox(root)) : createLocalSandbox(root);
+      sandbox = inner.then((s) => withHooks(s, hooksFor(contextId)));
       sandboxes.set(contextId, sandbox);
     }
     return sandbox;
@@ -142,6 +165,13 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
         publishStatus(bus, taskId, contextId, TaskState.TASK_STATE_FAILED, agentText(contextId, taskId, `failed: ${(err as Error).message}`));
       }
       bus.finished();
+    },
+
+    /** Stops every sandbox this executor started, so each runs its beforeStop hook. */
+    async shutdown(): Promise<void> {
+      const started = [...sandboxes.values()];
+      sandboxes.clear();
+      await stopAll(started);
     },
 
     async cancelTask(taskId: string, bus: ExecutionEventBus): Promise<void> {

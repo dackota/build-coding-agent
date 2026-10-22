@@ -9,7 +9,8 @@ const EXEC_MAX_BUFFER = 1024 * 1024;
 const isInside = (root: string, path: string) => path === root || path.startsWith(root + sep);
 
 /** The workspace as a real directory, with Node fs and child_process: what the agent's actor uses. */
-export async function createLocalSandbox(root: string): Promise<Sandbox> {
+export async function createLocalSandbox(root: string, opts: { execTimeoutMs?: number } = {}): Promise<Sandbox> {
+  const execTimeoutMs = opts.execTimeoutMs ?? EXEC_TIMEOUT_MS;
   await mkdir(root, { recursive: true });
   const realRoot = await realpath(root);
 
@@ -43,9 +44,9 @@ export async function createLocalSandbox(root: string): Promise<Sandbox> {
     },
     exec(command) {
       return new Promise<ExecResult>((done) => {
-        execFile("/bin/sh", ["-c", command], { cwd: realRoot, timeout: EXEC_TIMEOUT_MS, maxBuffer: EXEC_MAX_BUFFER }, (err, stdout, stderr) => {
+        execFile("/bin/sh", ["-c", command], { cwd: realRoot, timeout: execTimeoutMs, maxBuffer: EXEC_MAX_BUFFER }, (err, stdout, stderr) => {
           const code = err ? (typeof err.code === "number" ? err.code : 1) : 0;
-          done({ stdout, stderr, exitCode: code });
+          done({ stdout, stderr, exitCode: code, ...(err?.killed ? { hasTimedOut: true } : {}) });
         });
       });
     },

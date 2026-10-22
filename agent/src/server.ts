@@ -46,7 +46,7 @@ export function executorOptions(env: NodeJS.ProcessEnv): ExecutorOptions {
 }
 
 /** Load config, build the A2A request handler, and serve A2A over gRPC. */
-export async function startServer(opts: ServerOptions): Promise<grpc.Server> {
+export async function startServer(opts: ServerOptions): Promise<{ server: grpc.Server; shutdown(): Promise<void> }> {
   const config = loadConfigFromEnv(opts.env);
   const { controlPlaneUrl } = loadRuntimeFromEnv(opts.env);
   // kagent keeps the task record in its controller; without a control plane URL (local runs) the SDK's in-memory store does.
@@ -57,11 +57,12 @@ export async function startServer(opts: ServerOptions): Promise<grpc.Server> {
   // Key names only, never values: shows what kagent put in the config (subagent definitions included).
   const described = describeConfig(opts.env.KAGENT_CONFIG_JSON ?? readFileSync(opts.env.KAGENT_CONFIG_PATH ?? "/config/config.json", "utf8"));
   log("config-received", { agentKeys: described.agentKeys.join(","), subAgents: JSON.stringify(described.subAgents) });
-  const handler = new DefaultRequestHandler(buildCard(opts.grpcAddr, opts.cardJson), tasks, createExecutor(config, dataDir, executorOptions(opts.env)));
+  const executor = createExecutor(config, dataDir, executorOptions(opts.env));
+  const handler = new DefaultRequestHandler(buildCard(opts.grpcAddr, opts.cardJson), tasks, executor);
   const server = new grpc.Server();
   server.addService(A2AService, grpcService({ requestHandler: handler, userBuilder: UserBuilder.noAuthentication }));
   const injector = server.createConnectionInjector(grpc.ServerCredentials.createInsecure());
   opts.listener.handoff((socket) => injector.injectConnection(socket));
   log("grpc-listening", { addr: opts.grpcAddr, model: config.model, taskStore: controlPlaneUrl ? "controller" : "memory" });
-  return server;
+  return { server, shutdown: () => executor.shutdown() };
 }
