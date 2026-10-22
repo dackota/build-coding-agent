@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down status smoke preflight
+.PHONY: help up down status smoke preflight deploy chat
 
 help: ## List the targets
 	@grep -E '^[a-z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "%-8s %s\n", $$1, $$2}'
@@ -23,3 +23,9 @@ smoke: ## Push an image and apply a Harness by its digest, then one message to t
 
 preflight: ## Check tools, versions, and OPENCODE_KEY without creating anything
 	platform/preflight.sh
+
+deploy: ## Build the agent image, push it, apply the Harness and Agent by digest (image named by the registry's kind-network address)
+	platform/deploy.sh
+
+chat: ## Send one message to the deployed agent through the kagent controller: make chat MSG="hello"
+	pnpm --dir agent run cli -- "$(MSG)"

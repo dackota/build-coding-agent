@@ -15,10 +15,12 @@ and set `OPENCODE_KEY`, then:
 make up       # kind cluster, local registry, Substrate, kagent, agentgateway
 make status   # ok or FAIL per part
 make smoke    # registry digest in a Harness, and one message to kagent's stock agent
+make deploy   # build the agent image, push it, apply Harness and Agent by digest
+make chat MSG="What is 7 times 6?"   # one message through the kagent controller
 make down     # remove the cluster and the registry
 ```
 
-See `platform/README.md`, and `docs/pinned-versions.md` for every pinned version.
+The agent is in `agent/` (see `agent/README.md`). See `platform/README.md`, and `docs/pinned-versions.md` for every pinned version.
 
 ## Secrets
 
