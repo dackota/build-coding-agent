@@ -31,11 +31,12 @@ export type FakeModel = {
   close: () => Promise<void>;
 };
 
-export type ScriptedReply = string | { toolCall: { name: string; args: unknown } };
+export type ScriptedReply = string | { toolCall: { name: string; args: unknown } } | { error: number };
 
 /**
  * An OpenAI-compatible chat completions stub that plays `script` in order (the last entry
- * repeats). A string is a text reply; `{ toolCall }` makes the model call a tool.
+ * repeats). A string is a text reply; `{ toolCall }` makes the model call a tool; `{ error }`
+ * answers with that HTTP status.
  */
 export async function startFakeModel(script: ScriptedReply | ScriptedReply[] = SCRIPTED_REPLY): Promise<FakeModel> {
   const replies = Array.isArray(script) ? script : [script];
@@ -51,6 +52,11 @@ export async function startFakeModel(script: ScriptedReply | ScriptedReply[] = S
         return;
       }
       const reply = replies[index]!;
+      if (typeof reply === "object" && "error" in reply) {
+        res.writeHead(reply.error, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "scripted model failure", type: "invalid_request_error" } }));
+        return;
+      }
       const message =
         typeof reply === "string"
           ? { role: "assistant", content: reply }

@@ -114,6 +114,19 @@ it("reads a pause from the controller's reply: state, ids, and the questions", a
   expect(got.text).toBe("Which colour?");
 });
 
+it("continues a session: a new turn on the given context, with no task id", async () => {
+  const stub = await stubController({ jsonrpc: "2.0", id: 1, result: { task: { id: "task-2", contextId: "ctx-9", status: { state: "TASK_STATE_COMPLETED" }, artifacts: [{ parts: [{ text: "42" }] }] } } });
+  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "what number?", contextId: "ctx-9" });
+  stub.close();
+
+  const message = stub.seen[0]?.body.params.message;
+  expect(message.contextId).toBe("ctx-9");
+  expect(message.taskId).toBeUndefined();
+  expect(message.metadata).toBeUndefined();
+  expect(got.contextId).toBe("ctx-9");
+  expect(got.text).toBe("42");
+});
+
 it("answers a pause with an ask_user_response on the same task and context", async () => {
   const stub = await stubController({ jsonrpc: "2.0", id: 1, result: { task: { id: "task-9", contextId: "ctx-9", status: { state: "TASK_STATE_COMPLETED" }, artifacts: [{ parts: [{ text: "Done: blue." }] }] } } });
   const got = await sendTurn({

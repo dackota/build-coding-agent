@@ -12,7 +12,7 @@ import { createLocalSandbox } from "./local-sandbox.ts";
 import { log } from "./log.ts";
 import { readIfExists, type Sandbox } from "./sandbox.ts";
 import { AGENTS_MD_FILE, buildSystemPrompt } from "./system-prompt.ts";
-import { clearPending, loadPending, type PendingPause, savePending, workspaceDir } from "./session-state.ts";
+import { loadSession, type PendingPause, saveSession, workspaceDir } from "./session-state.ts";
 import { ChangeTracker } from "./workspace-diff.ts";
 
 const ASK_USER = "ask_user";
@@ -116,7 +116,10 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
 
   async function run(ctx: RequestContext, bus: ExecutionEventBus): Promise<void> {
     const { taskId, contextId } = ctx;
-    const pending = loadPending(dataDir, contextId);
+    // Everything the session knows comes from disk: a wake is a cold start.
+    const session = loadSession(dataDir, contextId);
+    const history = session.messages as ModelMessage[];
+    const { pending } = session;
     log("turn", { taskId, contextId, pending: pending ? pending.taskId : "", answered: parseAskUserResponse(ctx.userMessage) ? "yes" : "no" });
     const sandbox = await sandboxFor(contextId);
     let messages: ModelMessage[];
@@ -142,7 +145,7 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
       // Attached files are the turn's starting point: written before the baseline, so not in the diff.
       for (const f of files) await sandbox.writeFile(f.path, f.content);
       const listing = files.length > 0 ? `\n\nFiles in the workspace: ${files.map((f) => f.path).join(", ")}` : "";
-      messages = [{ role: "user", content: `${text}${listing}` }];
+      messages = [...history, { role: "user", content: `${text}${listing}` }];
     }
 
     const tools = { ...createFileTools(sandbox, changes), [ASK_USER]: askUserTool };
@@ -153,7 +156,15 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
       tools,
       stopWhen: stepCountIs(opts.maxSteps),
     });
-    const result = await agent.generate({ messages });
+    const result = await agent.generate({
+      messages,
+      // Save after every step, so a crash mid-turn keeps the steps that finished. A step that
+      // calls ask_user is saved as the pause below instead: its call has no result yet.
+      onStepFinish: (step) => {
+        if (step.toolCalls.some((c) => c.toolName === ASK_USER)) return;
+        saveSession(dataDir, contextId, { ...session, messages: [...messages, ...step.response.messages] });
+      },
+    });
 
     const call = result.toolCalls.find((c) => c.toolName === ASK_USER);
     if (call) {
@@ -166,12 +177,13 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
         messages: [...messages, ...result.response.messages],
         baseline: changes.baseline(),
       };
-      savePending(dataDir, contextId, paused);
+      // The paused turn lives in the pause until it is answered; the conversation stays as it was.
+      saveSession(dataDir, contextId, { ...session, messages: history, pending: paused });
       publishPause(bus, taskId, contextId, paused.requestId, questions);
       return;
     }
 
-    clearPending(dataDir, contextId);
+    saveSession(dataDir, contextId, { messages: [...messages, ...result.response.messages], todos: session.todos });
     const isAtStepLimit = result.finishReason === "tool-calls" && result.steps.length >= opts.maxSteps;
     if (isAtStepLimit) log("step-limit", { taskId, steps: result.steps.length });
     const reply = isAtStepLimit

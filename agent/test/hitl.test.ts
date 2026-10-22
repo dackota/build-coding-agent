@@ -60,9 +60,9 @@ it("pauses with INPUT_REQUIRED and an ask_user_request", async () => {
   expect(paused.request?.questions).toEqual(QUESTION.questions);
   expect(paused.text).toContain("Which colour should the button be?");
   // The pending pause is saved as JSON under the data dir, per context.
-  const file = join(dataDir, "sessions", paused.contextId, "pending.json");
+  const file = join(dataDir, "sessions", paused.contextId, "state.json");
   expect(existsSync(file)).toBe(true);
-  expect(JSON.parse(readFileSync(file, "utf8")).requestId).toBe(paused.request?.id);
+  expect(JSON.parse(readFileSync(file, "utf8")).pending.requestId).toBe(paused.request?.id);
 });
 
 it("finishes after the agent process is killed and restarted between the question and the answer", async () => {
@@ -91,7 +91,11 @@ it("finishes after the agent process is killed and restarted between the questio
   // The model saw the answer, as the result of its own ask_user call.
   expect(model.requests.at(-1)?.body).toContain("blue");
   // The pause is cleared once answered.
-  expect(readdirSync(join(dataDir, "sessions", paused.contextId))).not.toContain("pending.json");
+  const saved = JSON.parse(readFileSync(join(dataDir, "sessions", paused.contextId, "state.json"), "utf8"));
+  expect(saved.pending).toBeUndefined();
+  expect(readdirSync(join(dataDir, "sessions", paused.contextId))).toEqual(["state.json"]);
+  // The answered turn joins the session's conversation.
+  expect(JSON.stringify(saved.messages)).toContain(FINAL);
 });
 
 it("keeps its task in the controller, as a runtime caller, and settles each boundary", async () => {

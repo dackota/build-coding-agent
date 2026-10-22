@@ -3,7 +3,8 @@
 // Attach files with --file <path> (repeatable); the agent replies with its text and a unified diff.
 // A pause prints the question and a `paused:` line with the ids; answer it with
 //   pnpm --dir agent run cli -- --task <id> --context <id> --request <id> "<answer>" ["<answer 2>" ...]
-// (one answer per question, in order). Every call sends the kagent HITL extension header.
+// (one answer per question, in order). A reply prints `context=<id>` on stderr; continue the
+// session with `--context <id> "<message>"`. Every call sends the kagent HITL extension header.
 // Without KAGENT_URL it opens a kubectl port-forward to the controller on kind-build-coding-agent.
 import { type ChildProcess, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -65,7 +66,12 @@ async function sendWithRetry(send: () => Promise<Turn>): Promise<Turn> {
 const FLAGS = ["--task", "--context", "--request"] as const;
 const FILE_FLAG = "--file";
 
-type Args = { text: string; files: string[]; reply?: { taskId: string; contextId: string; requestId: string; answers: string[][] } };
+type Args = {
+  text: string;
+  files: string[];
+  contextId?: string;
+  reply?: { taskId: string; contextId: string; requestId: string; answers: string[][] };
+};
 
 function parseArgs(argv: string[]): Args {
   const args = argv.filter((a) => a !== "--");
@@ -83,6 +89,15 @@ function parseArgs(argv: string[]): Args {
     process.exit(2);
   }
   if (flags.size === 0) return { text: rest.join(" ").trim(), files };
+  // --context alone continues the session with a new message.
+  if (flags.size === 1 && flags.has("--context")) {
+    const contextId = flags.get("--context")!;
+    if (!contextId) {
+      console.error("--context needs a context id");
+      process.exit(2);
+    }
+    return { text: rest.join(" ").trim(), files, contextId };
+  }
   const missing = FLAGS.filter((f) => !flags.get(f));
   if (missing.length > 0 || rest.length === 0) {
     console.error(`answering a pause needs ${FLAGS.join(", ")} and at least one answer`);
@@ -100,6 +115,8 @@ function printTurn(turn: Turn): void {
   if (!turn.pause) {
     if (!turn.text) throw new Error("the agent sent an empty reply");
     console.log(turn.text);
+    // On stderr, so stdout stays the reply: the id to continue this session with --context.
+    if (turn.contextId) console.error(`context=${turn.contextId}`);
     return;
   }
   for (const q of turn.pause.questions) {
@@ -124,7 +141,7 @@ function readAttachments(paths: string[]): { name: string; content: Buffer }[] {
   });
 }
 
-const { text, files: filePaths, reply } = parseArgs(process.argv.slice(2));
+const { text, files: filePaths, contextId, reply } = parseArgs(process.argv.slice(2));
 if (!text) {
   console.error('usage: pnpm --dir agent run cli -- [--file <path>]... "<message>"');
   process.exit(2);
@@ -141,7 +158,7 @@ const agent = process.env.AGENT ?? "hello-agent";
 const forward = process.env.KAGENT_URL ? undefined : await openForward(namespace);
 try {
   const baseUrl = process.env.KAGENT_URL || forward!.baseUrl;
-  printTurn(await sendWithRetry(() => sendTurn({ baseUrl, namespace, agent, text, files, reply })));
+  printTurn(await sendWithRetry(() => sendTurn({ baseUrl, namespace, agent, text, files, contextId, reply })));
 } catch (err) {
   console.error((err as Error).message);
   process.exitCode = 1;

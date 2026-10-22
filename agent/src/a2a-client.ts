@@ -8,6 +8,8 @@ export type SendOptions = {
   timeoutMs?: number;
   /** Files sent with the message, each as a raw part named by its workspace path. */
   files?: { name: string; content: Buffer }[];
+  /** Continues a session: a new turn (a new task) on this context. */
+  contextId?: string;
   /** Answers the pause of an earlier turn: same task and context, with an ask_user_response. */
   reply?: { taskId: string; contextId: string; requestId: string; answers: string[][] };
 };
@@ -42,6 +44,7 @@ export async function sendTurn(opts: SendOptions): Promise<Turn> {
       { text: opts.text },
     ],
   };
+  if (opts.contextId) message.contextId = opts.contextId;
   if (opts.reply) {
     message.taskId = opts.reply.taskId;
     message.contextId = opts.reply.contextId;
