@@ -72,6 +72,14 @@ describe("buildSystemPrompt", () => {
     expect(buildSystemPrompt(base)).not.toContain("RULE-X");
   });
 
+  it("states the ambiguity rule when ask_user is a tool", () => {
+    const prompt = buildSystemPrompt({ ...base, toolNames: ["a_tool", "ask_user"] });
+    expect(prompt).toMatch(/do not guess/i);
+    expect(prompt).toMatch(/ask_user/);
+    expect(prompt).toMatch(/choices/i);
+    expect(buildSystemPrompt(base)).not.toMatch(/do not guess/i);
+  });
+
   it("keeps AGENTS.md whole, however large", () => {
     const big = `${"x".repeat(200_000)}END`;
     expect(buildSystemPrompt({ ...base, agentsMd: big })).toContain(big);

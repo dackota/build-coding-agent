@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { describeConfig, loadConfig, loadConfigFromEnv, loadRuntimeFromEnv } from "../src/config.ts";
+import { describeConfig, loadConfig, loadConfigFromEnv, loadRuntimeFromEnv, parseMcpBindings } from "../src/config.ts";
 
 function write(content: string): string {
   const path = join(mkdtempSync(join(tmpdir(), "cfg-")), "config.json");
@@ -63,6 +63,36 @@ it("reads the control plane URL kagent puts under runtime", () => {
   const json = JSON.stringify({ runtime: { control_plane_url: "http://kagent-controller.kagent:8083" }, agent: {} });
   expect(loadRuntimeFromEnv({ KAGENT_CONFIG_JSON: json })).toEqual({ controlPlaneUrl: "http://kagent-controller.kagent:8083" });
   expect(loadRuntimeFromEnv({ KAGENT_CONFIG_JSON: JSON.stringify({ agent: {} }) })).toEqual({ controlPlaneUrl: undefined });
+});
+
+it("reads MCP bindings from http_tools and sse_tools with require_approval", () => {
+  const json = JSON.stringify({
+    agent: {
+      model: { model: "m", openai: { base_url: "http://gw/v1" } },
+      http_tools: [
+        { params: { url: "http://mcp-a/mcp", headers: { "x-team": "a" } }, tools: ["delete_branch"], require_approval: true },
+        { params: { url: "http://mcp-b/mcp" } },
+      ],
+      sse_tools: [{ params: { url: "http://mcp-c/sse" }, tools: [], require_approval: true }],
+    },
+  });
+  expect(parseMcpBindings(json)).toEqual([
+    { transport: "http", url: "http://mcp-a/mcp", headers: { "x-team": "a" }, tools: ["delete_branch"], requireApproval: true },
+    { transport: "http", url: "http://mcp-b/mcp", headers: {}, tools: [], requireApproval: false },
+    { transport: "sse", url: "http://mcp-c/sse", headers: {}, tools: [], requireApproval: true },
+  ]);
+  expect(parseMcpBindings(JSON.stringify({ agent: {} }))).toEqual([]);
+});
+
+it("fails on an MCP header whose value is not a string, naming the key and never the value", () => {
+  const json = JSON.stringify({ agent: { http_tools: [{ params: { url: "http://mcp/mcp", headers: { authorization: { token: "sk-secret" } } } }] } });
+  expect(() => parseMcpBindings(json)).toThrow(/http_tools\[0\]\.params\.headers\.authorization/);
+  expect(() => parseMcpBindings(json)).not.toThrow(/sk-secret/);
+});
+
+it("fails on an MCP binding with no URL", () => {
+  const json = JSON.stringify({ agent: { http_tools: [{ params: {}, require_approval: true }] } });
+  expect(() => parseMcpBindings(json)).toThrow(/http_tools\[0\]\.params\.url/);
 });
 
 it("reads subagent definitions from agent.sub_agents, each with its own model and instruction", () => {

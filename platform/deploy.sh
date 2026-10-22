@@ -26,6 +26,9 @@ registry_ip="$(docker inspect -f '{{(index .NetworkSettings.Networks "kind").IPA
 image="$registry_ip:$REGISTRY_INTERNAL_PORT/$REPO@$digest"
 echo "pushed $image"
 
+# The MCP server the AgentTemplate binds with requireApproval, ready before the agent needs it.
+sed "s|@NODE_IMAGE@|$NODE_IMAGE|" "$PLATFORM_DIR/demo-mcp.yaml" | k apply -f -
+k rollout status deployment/demo-mcp -n demo-mcp --timeout="$READY_TIMEOUT"
 sed "s|@IMAGE@|$image|" "$PLATFORM_DIR/agent.yaml.tmpl" | k apply -f -
 k wait --for=condition=Ready "agent/$AGENT" -n "$KAGENT_NS" --timeout="$READY_TIMEOUT"
 echo "ok   Agent $AGENT is ready with $image"

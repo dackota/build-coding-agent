@@ -8,6 +8,8 @@ set -euo pipefail
 
 WAIT="${STATUS_TIMEOUT:-10s}"
 PODCERT_NS="podcertificate-controller-system"
+# The demo MCP server make deploy runs (platform/demo-mcp.yaml); empty before the first deploy.
+DEMO_MCP_NS="demo-mcp"
 LOCK_FILE="$PLATFORM_DIR/images.lock"
 failed=0
 releases=""
@@ -76,7 +78,7 @@ check_agent() {
 IMAGE_IDS='{range .items[*].status.containerStatuses[*]}{.imageID}{"\n"}{end}{range .items[*].status.initContainerStatuses[*]}{.imageID}{"\n"}{end}'
 check_images() {
   local ns out ids="" id strays=""
-  for ns in "$KAGENT_NS" "$SUBSTRATE_NS" "$PODCERT_NS" "$AGW_NS"; do
+  for ns in "$KAGENT_NS" "$SUBSTRATE_NS" "$PODCERT_NS" "$AGW_NS" "$DEMO_MCP_NS"; do
     # shellcheck disable=SC2310  # wrapper: k is one kubectl call
     out="$(k get pods -n "$ns" -o "jsonpath=$IMAGE_IDS" 2>&1)" ||
       { flunk "images: kubectl in $ns: $(first_line "$out")"; return 0; }

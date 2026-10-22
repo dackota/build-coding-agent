@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { Role, TaskState } from "@a2a-js/sdk";
 import type { Message, Task } from "@a2a-js/sdk";
 import { AgentEvent, type AgentExecutor, type ExecutionEventBus, type RequestContext } from "@a2a-js/sdk/server";
-import { type ModelMessage, stepCountIs, tool, ToolLoopAgent } from "ai";
+import { type ModelMessage, stepCountIs, type Tool, tool, ToolLoopAgent } from "ai";
 import { z } from "zod";
-import type { AgentConfig } from "./config.ts";
+import type { AgentConfig, McpBinding } from "./config.ts";
 import { capTools, logStepUsage, pruneMessages } from "./context.ts";
 import { createFileTools } from "./file-tools.ts";
 import { approvalHint, pendingTools, resumeApproval, turnGate } from "./approval.ts";
@@ -14,13 +14,14 @@ import { createLocalSandbox } from "./local-sandbox.ts";
 import { log } from "./log.ts";
 import { createSkillTool, discoverSkills, type Skill } from "./skills.ts";
 import { readIfExists, type Sandbox, type SandboxHooks, withHooks } from "./sandbox.ts";
-import { AGENTS_MD_FILE, buildSystemPrompt } from "./system-prompt.ts";
+import { AGENTS_MD_FILE, ASK_USER_TOOL, buildSystemPrompt } from "./system-prompt.ts";
 import { type AskUserPause, loadSession, saveSession, type SessionState, type ToolApprovalPause, workspaceDir } from "./session-state.ts";
-import { createShellTool, SHELL_TOOL } from "./shell-tool.ts";
+import { openMcpTools } from "./mcp-tools.ts";
+import { type ApprovalGate, createShellTool, SHELL_TOOL } from "./shell-tool.ts";
 import { createTaskTool } from "./subagents.ts";
 import { ChangeTracker } from "./workspace-diff.ts";
 
-const ASK_USER = "ask_user";
+const ASK_USER = ASK_USER_TOOL;
 const LOG_FIELD_MAX_CHARS = 200;
 
 /** The lifecycle hooks of one session's sandbox: each writes a log line the actor's log carries. */
@@ -131,13 +132,19 @@ const isPausingStep = (step: Pick<TurnResult, "content" | "toolCalls">): boolean
 
 /**
  * Runs each message through a tool loop (file tools and the shell on the context's Sandbox,
- * and ask_user) with the model behind the gateway, and replies as an A2A Task: the model's
+ * ask_user, and the tools of the config's MCP bindings) with the model behind the gateway, and replies as an A2A Task: the model's
  * text, and a unified diff of what the turn changed. A turn ends at the step limit. When the
- * model calls ask_user, or a shell command the safety gate holds, the task pauses in
+ * model calls ask_user, or a call the safety gate holds (a risky shell command, or any tool of
+ * an MCP binding with requireApproval), the task pauses in
  * INPUT_REQUIRED (kagent HITL extension: ask_user_request or tool_approval_request) and the
  * pending pause is saved in the session state, so a cold start can finish it.
  */
-export function createExecutor(config: AgentConfig, dataDir: string, opts: ExecutorOptions): AgentExecutor & { shutdown(): Promise<void> } {
+export function createExecutor(
+  config: AgentConfig,
+  dataDir: string,
+  opts: ExecutorOptions,
+  mcpBindings: readonly McpBinding[] = [],
+): AgentExecutor & { shutdown(): Promise<void> } {
   const model = gatewayModel(config.baseUrl, config.model);
   const sandboxes = new Map<string, Promise<Sandbox>>();
 
@@ -206,13 +213,34 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
     await publishReply(bus, ids, sandbox, turn.changes, result);
   }
 
+  /** Runs the turn with this turn's MCP clients open, and closes them after. */
   async function generateTurn(ctx: RequestContext, sandbox: Sandbox, turn: Turn, session: SessionState): Promise<TurnResult> {
-    const { taskId, contextId } = ctx;
     const skills = await discoverSkills(sandbox);
+    const gate = turnGate(turn.approvedCalls, turn.approvedKinds);
+    const mcp = await openMcpTools(mcpBindings, gate);
+    try {
+      return await runAgent(ctx, sandbox, turn, session, skills, gate, mcp.tools);
+    } finally {
+      await mcp.close();
+    }
+  }
+
+  async function runAgent(
+    ctx: RequestContext,
+    sandbox: Sandbox,
+    turn: Turn,
+    session: SessionState,
+    skills: Skill[],
+    gate: ApprovalGate,
+    mcpTools: Record<string, Tool>,
+  ): Promise<TurnResult> {
+    const { taskId, contextId } = ctx;
     const tools = capTools(
       {
+        // Built-in tools win a name clash with an MCP tool.
+        ...mcpTools,
         ...createFileTools(sandbox, turn.changes),
-        [SHELL_TOOL]: createShellTool(sandbox, turnGate(turn.approvedCalls, turn.approvedKinds)),
+        [SHELL_TOOL]: createShellTool(sandbox, gate),
         [ASK_USER]: askUserTool,
         ...(skills.length > 0 ? { load_skill: createSkillTool(skills, taskId) } : {}),
         ...(config.subAgents.length > 0 ? { task: createTaskTool(config.subAgents, { sandbox, changes: turn.changes, taskId, opts }) } : {}),

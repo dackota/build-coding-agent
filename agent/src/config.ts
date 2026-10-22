@@ -78,6 +78,47 @@ function parseConfig(text: string, path: string): AgentConfig {
   };
 }
 
+/** One MCP tool binding, as kagent resolves an AgentTemplate's `tools[].mcp` into the config. */
+export type McpBinding = {
+  transport: "http" | "sse";
+  url: string;
+  headers: Record<string, string>;
+  /** The tool names the binding exposes; empty exposes every tool of the server. */
+  tools: string[];
+  /** Pause for a human decision before each call of a tool of this binding. */
+  requireApproval: boolean;
+};
+
+type RawBinding = { params?: { url?: unknown; headers?: unknown }; tools?: unknown; require_approval?: unknown };
+
+/** The binding's headers; a value that is not a string fails, by key name only (values may be credentials). */
+function toHeaders(raw: unknown, where: string): Record<string, string> {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new Error(`agent config: ${where}.params.headers is not an object; shape ${shape(raw)}`);
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value !== "string") throw new Error(`agent config: ${where}.params.headers.${key} is not a string; shape ${shape(value)}`);
+  }
+  return { ...(raw as Record<string, string>) };
+}
+
+function toBinding(raw: RawBinding, transport: McpBinding["transport"], where: string): McpBinding {
+  const url = raw?.params?.url;
+  if (typeof url !== "string" || url === "") throw new Error(`agent config: ${where}.params.url is missing; shape ${shape(raw)}`);
+  const headers = toHeaders(raw.params?.headers, where);
+  const tools = Array.isArray(raw.tools) ? raw.tools.filter((t): t is string => typeof t === "string") : [];
+  return { transport, url, headers, tools, requireApproval: raw.require_approval === true };
+}
+
+/** The MCP bindings under agent.http_tools (Streamable HTTP) and agent.sse_tools (SSE). */
+export function parseMcpBindings(json: string): McpBinding[] {
+  const agent = ((JSON.parse(json) as { agent?: { http_tools?: unknown; sse_tools?: unknown } }).agent ?? {}) as Record<string, unknown>;
+  const list = (key: string): RawBinding[] => (Array.isArray(agent[key]) ? (agent[key] as RawBinding[]) : []);
+  return [
+    ...list("http_tools").map((b, i) => toBinding(b, "http", `http_tools[${i}]`)),
+    ...list("sse_tools").map((b, i) => toBinding(b, "sse", `sse_tools[${i}]`)),
+  ];
+}
+
 /** runtime.control_plane_url: the controller's runtime API, where Substrate injects the Actor JWT. */
 export function loadRuntimeFromEnv(env: NodeJS.ProcessEnv): { controlPlaneUrl: string | undefined } {
   const text = env.KAGENT_CONFIG_JSON ?? readFileSync(env.KAGENT_CONFIG_PATH ?? "/config/config.json", "utf8");

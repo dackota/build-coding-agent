@@ -1,10 +1,12 @@
-// The tool approval pause: built from the AI SDK's approval requests, and resumed from the
-// user's decisions (approve, deny with a reason, approve for this session).
+// The tool approval pause: built from the AI SDK's approval requests (risky shell commands, and
+// calls of tools on an MCP binding with requireApproval), and resumed from the user's decisions
+// (approve, deny with a reason, approve for this session).
 import type { ModelMessage } from "ai";
 import type { ToolApprovalResponse } from "./hitl.ts";
 import type { ToolApprovalPause } from "./session-state.ts";
 import type { ApprovalGate } from "./shell-tool.ts";
-import { riskKinds } from "./shell-tool.ts";
+import { mcpKind } from "./mcp-tools.ts";
+import { riskKinds, SHELL_TOOL } from "./shell-tool.ts";
 
 type ApprovalRequestPart = { type: "tool-approval-request"; approvalId: string; toolCall: { toolCallId: string; toolName: string; input: unknown } };
 
@@ -22,13 +24,17 @@ export function pendingTools(content: readonly { type: string }[]): ToolApproval
     .filter((p): p is ApprovalRequestPart => p.type === "tool-approval-request")
     .map(({ approvalId, toolCall }) => {
       const args = (toolCall.input ?? {}) as Record<string, unknown>;
-      return { id: approvalId, call_id: toolCall.toolCallId, name: toolCall.toolName, args, kinds: riskKinds(String(args.command ?? "")) };
+      const name = toolCall.toolName;
+      const kinds = name === SHELL_TOOL ? riskKinds(String(args.command ?? "")) : [mcpKind(name)];
+      return { id: approvalId, call_id: toolCall.toolCallId, name, args, kinds };
     });
 }
 
 export function approvalHint(tools: ToolApprovalPause["tools"]): string {
-  if (tools.length === 1) return `Run ${JSON.stringify(String(tools[0]!.args.command ?? ""))} in the workspace?`;
-  return `Run ${tools.length} commands in the workspace?`;
+  const isShellOnly = tools.every((t) => t.name === SHELL_TOOL);
+  if (tools.length === 1 && isShellOnly) return `Run ${JSON.stringify(String(tools[0]!.args.command ?? ""))} in the workspace?`;
+  if (tools.length === 1) return `Call ${tools[0]!.name} with ${JSON.stringify(tools[0]!.args)}?`;
+  return isShellOnly ? `Run ${tools.length} commands in the workspace?` : `Run ${tools.length} tool calls?`;
 }
 
 export type Resumed = { messages: ModelMessage[]; approvedCalls: Set<string>; sessionKinds: string[] };
@@ -50,7 +56,8 @@ export function resumeApproval(pause: ToolApprovalPause, response: ToolApprovalR
     const tool = pause.tools.find((t) => t.id === id)!;
     if (decision.type !== "deny") approvedCalls.add(tool.call_id);
     if (decision.type === "approve_session") sessionKinds.push(...tool.kinds);
-    const reason = decision.type === "deny" ? `The user denied this command${decision.reason ? `: ${decision.reason}` : "."}` : undefined;
+    const what = tool.name === SHELL_TOOL ? "command" : "tool call";
+    const reason = decision.type === "deny" ? `The user denied this ${what}${decision.reason ? `: ${decision.reason}` : "."}` : undefined;
     return { type: "tool-approval-response" as const, approvalId: id, approved: decision.type !== "deny", reason };
   });
   return { messages: [...(pause.messages as ModelMessage[]), { role: "tool", content }], approvedCalls, sessionKinds };

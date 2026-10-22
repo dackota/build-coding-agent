@@ -4,7 +4,7 @@ import type { AgentCard } from "@a2a-js/sdk";
 import { DefaultRequestHandler, InMemoryTaskStore, type TaskStore } from "@a2a-js/sdk/server";
 import { A2AService, grpcService, UserBuilder } from "@a2a-js/sdk/server/grpc";
 import type { EarlyListener } from "./early-listener.ts";
-import { describeConfig, loadConfigFromEnv, loadRuntimeFromEnv } from "./config.ts";
+import { describeConfig, loadConfigFromEnv, loadRuntimeFromEnv, parseMcpBindings } from "./config.ts";
 import { ControllerTaskStore, DEFAULT_IDENTITY_PATH } from "./controller-task-store.ts";
 import { DEFAULT_MAX_TOOL_OUTPUT_CHARS, TRUNCATION_MARKER } from "./context.ts";
 import { createExecutor, type ExecutorOptions } from "./executor.ts";
@@ -55,9 +55,16 @@ export async function startServer(opts: ServerOptions): Promise<{ server: grpc.S
     : new InMemoryTaskStore();
   const dataDir = opts.env.AGENT_DATA_DIR ?? "/data";
   // Key names only, never values: shows what kagent put in the config (subagent definitions included).
-  const described = describeConfig(opts.env.KAGENT_CONFIG_JSON ?? readFileSync(opts.env.KAGENT_CONFIG_PATH ?? "/config/config.json", "utf8"));
-  log("config-received", { agentKeys: described.agentKeys.join(","), subAgents: JSON.stringify(described.subAgents) });
-  const executor = createExecutor(config, dataDir, executorOptions(opts.env));
+  const configJson = opts.env.KAGENT_CONFIG_JSON ?? readFileSync(opts.env.KAGENT_CONFIG_PATH ?? "/config/config.json", "utf8");
+  const described = describeConfig(configJson);
+  const mcpBindings = parseMcpBindings(configJson);
+  log("config-received", {
+    agentKeys: described.agentKeys.join(","),
+    subAgents: JSON.stringify(described.subAgents),
+    // URLs and tool names only: headers may carry credentials.
+    mcp: JSON.stringify(mcpBindings.map((b) => ({ url: b.url, tools: b.tools, requireApproval: b.requireApproval }))),
+  });
+  const executor = createExecutor(config, dataDir, executorOptions(opts.env), mcpBindings);
   const handler = new DefaultRequestHandler(buildCard(opts.grpcAddr, opts.cardJson), tasks, executor);
   const server = new grpc.Server();
   server.addService(A2AService, grpcService({ requestHandler: handler, userBuilder: UserBuilder.noAuthentication }));

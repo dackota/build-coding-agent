@@ -89,7 +89,7 @@ export async function startFakeModel(script: ScriptedReply | ScriptedReply[] = S
   };
 }
 
-export function writeFakeConfig(baseUrl: string, opts: { controlPlaneUrl?: string; subAgents?: unknown[] } = {}): string {
+export function writeFakeConfig(baseUrl: string, opts: { controlPlaneUrl?: string; subAgents?: unknown[]; httpTools?: unknown[] } = {}): string {
   const dir = mkdtempSync(join(tmpdir(), "agent-config-"));
   const path = join(dir, "config.json");
   writeFileSync(
@@ -108,6 +108,7 @@ export function writeFakeConfig(baseUrl: string, opts: { controlPlaneUrl?: strin
         instruction: "You are a test agent. Reply briefly.",
         stream: false,
         ...(opts.subAgents ? { sub_agents: opts.subAgents } : {}),
+        ...(opts.httpTools ? { http_tools: opts.httpTools } : {}),
       },
     }),
   );
