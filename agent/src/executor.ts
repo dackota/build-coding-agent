@@ -2,13 +2,13 @@ import { randomUUID } from "node:crypto";
 import { Role, TaskState } from "@a2a-js/sdk";
 import type { Message, Task } from "@a2a-js/sdk";
 import { AgentEvent, type AgentExecutor, type ExecutionEventBus, type RequestContext } from "@a2a-js/sdk/server";
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { type ModelMessage, stepCountIs, tool, ToolLoopAgent } from "ai";
 import { z } from "zod";
 import type { AgentConfig } from "./config.ts";
-import { capTools, pruneMessages } from "./context.ts";
+import { capTools, logStepUsage, pruneMessages } from "./context.ts";
 import { createFileTools } from "./file-tools.ts";
 import { approvalHint, pendingTools, resumeApproval, turnGate } from "./approval.ts";
+import { gatewayModel } from "./gateway.ts";
 import { askUserMessage, parseAskUserResponse, parseToolApprovalResponse, type Question, toolApprovalMessage } from "./hitl.ts";
 import { createLocalSandbox } from "./local-sandbox.ts";
 import { log } from "./log.ts";
@@ -17,6 +17,7 @@ import { readIfExists, type Sandbox, type SandboxHooks, withHooks } from "./sand
 import { AGENTS_MD_FILE, buildSystemPrompt } from "./system-prompt.ts";
 import { type AskUserPause, loadSession, saveSession, type SessionState, type ToolApprovalPause, workspaceDir } from "./session-state.ts";
 import { createShellTool, SHELL_TOOL } from "./shell-tool.ts";
+import { createTaskTool } from "./subagents.ts";
 import { ChangeTracker } from "./workspace-diff.ts";
 
 const ASK_USER = "ask_user";
@@ -137,7 +138,7 @@ const isPausingStep = (step: Pick<TurnResult, "content" | "toolCalls">): boolean
  * pending pause is saved in the session state, so a cold start can finish it.
  */
 export function createExecutor(config: AgentConfig, dataDir: string, opts: ExecutorOptions): AgentExecutor & { shutdown(): Promise<void> } {
-  const model = createOpenAICompatible({ name: "gateway", baseURL: config.baseUrl }).chatModel(config.model);
+  const model = gatewayModel(config.baseUrl, config.model);
   const sandboxes = new Map<string, Promise<Sandbox>>();
 
   function sandboxFor(contextId: string): Promise<Sandbox> {
@@ -214,6 +215,7 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
         [SHELL_TOOL]: createShellTool(sandbox, turnGate(turn.approvedCalls, turn.approvedKinds)),
         [ASK_USER]: askUserTool,
         ...(skills.length > 0 ? { load_skill: createSkillTool(skills, taskId) } : {}),
+        ...(config.subAgents.length > 0 ? { task: createTaskTool(config.subAgents, { sandbox, changes: turn.changes, taskId, opts }) } : {}),
       },
       opts.maxToolOutputChars,
     );
@@ -227,13 +229,7 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
       // pauses is saved as the pause instead.
       onStepFinish: (step) => {
         stepNumber++;
-        log("step-usage", {
-          taskId,
-          step: stepNumber,
-          inputTokens: step.usage.inputTokens ?? 0,
-          outputTokens: step.usage.outputTokens ?? 0,
-          cachedTokens: step.usage.inputTokenDetails?.cacheReadTokens ?? 0,
-        });
+        logStepUsage(taskId, stepNumber, step.usage);
         if (isPausingStep(step)) return;
         saveSession(dataDir, contextId, { ...session, messages: [...turn.messages, ...step.response.messages] });
       },

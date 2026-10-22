@@ -1,5 +1,6 @@
 // Context management: a cap on every tool's output, and pruning of old tool results.
-import type { ModelMessage, Tool } from "ai";
+import type { LanguageModelUsage, ModelMessage, Tool } from "ai";
+import { log } from "./log.ts";
 
 export const TRUNCATION_MARKER = "[truncated]";
 export const PRUNED_MARKER = "[old tool result pruned]";
@@ -50,5 +51,17 @@ export function pruneMessages(messages: ModelMessage[]): ModelMessage[] {
         part.type === "tool-result" ? { ...part, output: { type: "text" as const, value: PRUNED_MARKER } } : part,
       ),
     };
+  });
+}
+
+/** One `step-usage` log line for a model step; `agent` names the subagent when it is not the main agent. */
+export function logStepUsage(taskId: string, step: number, usage: LanguageModelUsage, agent?: string): void {
+  log("step-usage", {
+    taskId,
+    step,
+    inputTokens: usage.inputTokens ?? 0,
+    outputTokens: usage.outputTokens ?? 0,
+    cachedTokens: usage.inputTokenDetails?.cacheReadTokens ?? 0,
+    ...(agent ? { agent } : {}),
   });
 }

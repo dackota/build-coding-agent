@@ -1,10 +1,14 @@
 import { readFileSync } from "node:fs";
 
-export type AgentConfig = { model: string; baseUrl: string; instruction: string };
+/** A subagent kagent compiled from an AgentTemplate bound with `subAgent.templateRef`. */
+export type SubAgentDef = { name: string; description: string; instruction: string; model: string; baseUrl: string };
+export type AgentConfig = { model: string; baseUrl: string; instruction: string; subAgents: SubAgentDef[] };
 
 /**
  * The slice of kagent's resolved config this agent uses: the model name, the gateway
- * base URL (with /v1), and the system prompt. There is no key: the gateway holds it.
+ * base URL (with /v1), the system prompt, and the subagents under agent.sub_agents (each with
+ * its own model and instruction; a missing base URL falls back to the main agent's).
+ * There is no key: the gateway holds it.
  */
 export function loadConfig(path: string): AgentConfig {
   let text: string;
@@ -29,6 +33,28 @@ function shape(value: unknown): string {
   return `{${Object.entries(value).map(([k, v]) => `${k}:${shape(v)}`).join(",")}}`;
 }
 
+type ModelRaw = { model?: unknown; openai?: { base_url?: unknown } };
+
+function parseSubAgents(raw: unknown, fallbackBaseUrl: string): SubAgentDef[] {
+  if (!Array.isArray(raw)) return [];
+  const defs: SubAgentDef[] = [];
+  for (const [index, entry] of (raw as { name?: unknown; description?: unknown; instruction?: unknown; model?: ModelRaw }[]).entries()) {
+    const model = entry?.model?.model;
+    if (typeof entry?.name !== "string" || entry.name === "" || typeof model !== "string" || model === "") {
+      throw new Error(`agent config: agent.sub_agents[${index}] needs a name and model.model; shape ${shape(entry)}`);
+    }
+    const baseUrl = entry.model?.openai?.base_url;
+    defs.push({
+      name: entry.name,
+      description: typeof entry.description === "string" ? entry.description : "",
+      instruction: typeof entry.instruction === "string" ? entry.instruction : "",
+      model,
+      baseUrl: typeof baseUrl === "string" && baseUrl !== "" ? baseUrl : fallbackBaseUrl,
+    });
+  }
+  return defs;
+}
+
 function parseConfig(text: string, path: string): AgentConfig {
   let raw: unknown;
   try {
@@ -37,7 +63,7 @@ function parseConfig(text: string, path: string): AgentConfig {
     throw new Error(`agent config ${path} is not JSON: ${(err as Error).message}`);
   }
   const root = (raw ?? {}) as {
-    agent?: { model?: { model?: unknown; openai?: { base_url?: unknown } }; instruction?: unknown };
+    agent?: { model?: ModelRaw; instruction?: unknown; sub_agents?: unknown };
   };
   const agent = root.agent;
   const model = agent?.model?.model;
@@ -48,6 +74,7 @@ function parseConfig(text: string, path: string): AgentConfig {
     model,
     baseUrl,
     instruction: typeof agent?.instruction === "string" ? agent.instruction : "",
+    subAgents: parseSubAgents(agent?.sub_agents, baseUrl),
   };
 }
 

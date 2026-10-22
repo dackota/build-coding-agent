@@ -14,6 +14,28 @@ spec:
     snapshotPolicy:
       location: gs://ate-snapshots/kagent/
 ---
+# The subagents' own models, both through agentgateway like default-model-config:
+# a cheap one to explore, a stronger one to execute.
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata: {name: explorer-model-config, namespace: kagent}
+spec:
+  provider: OpenAI
+  model: glm-5.3-flash
+  openAI:
+    apiFormat: chatCompletions
+    baseUrl: http://agentgateway-proxy.agentgateway-system.svc.cluster.local/v1
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata: {name: executor-model-config, namespace: kagent}
+spec:
+  provider: OpenAI
+  model: glm-5.1
+  openAI:
+    apiFormat: chatCompletions
+    baseUrl: http://agentgateway-proxy.agentgateway-system.svc.cluster.local/v1
+---
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
 metadata: {name: hello-agent, namespace: kagent}
@@ -27,19 +49,33 @@ spec:
     only what the task asks for. The user gets a diff of your changes, so do not repeat the code.
     When a request is ambiguous and the answer is one of a few options, do not guess:
     call the ask_user tool once with the question and its choices, then use the answer.
+    The task tool hands a job to a subagent that shares your workspace: the explorer only reads
+    (cheap), the executor can write. Give each a complete prompt.
   tools:
     - subAgent:
         name: explorer
-        description: Read-only helper that explores and summarizes. Test binding for the S3 spike.
+        description: Read-only helper that finds and reads files and summarizes them. Cheap and fast.
         templateRef: {name: explorer-template}
+    - subAgent:
+        name: executor
+        description: Does the hard work with full file tools (read, write, edit, search).
+        templateRef: {name: executor-template}
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
 metadata: {name: explorer-template, namespace: kagent}
 spec:
-  description: Test subagent for the S3 spike
-  modelConfig: {name: default-model-config}
-  systemPrompt: You explore and summarize. You are read-only.
+  description: Read-only explorer subagent
+  modelConfig: {name: explorer-model-config}
+  systemPrompt: You explore the workspace with read_file and search, and answer with what you found. You cannot change files. Be brief.
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata: {name: executor-template, namespace: kagent}
+spec:
+  description: Executor subagent with full file tools
+  modelConfig: {name: executor-model-config}
+  systemPrompt: You carry out the job you are given with the file tools (read_file, write_file, edit_file, search). Read a file before editing it. Reply with a one-line summary of what you changed.
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent

@@ -14,7 +14,7 @@ it("reads the model name, gateway base URL, and instruction from the kagent conf
   const cfg = loadConfig(
     write(JSON.stringify({ agent: { model: { model: "glm-5", openai: { base_url: "http://gw/v1" } }, instruction: "Be brief." } })),
   );
-  expect(cfg).toEqual({ model: "glm-5", baseUrl: "http://gw/v1", instruction: "Be brief." });
+  expect(cfg).toEqual({ model: "glm-5", baseUrl: "http://gw/v1", instruction: "Be brief.", subAgents: [] });
 });
 
 it("fails with a clear message when the model or base URL is missing", () => {
@@ -28,6 +28,7 @@ it("prefers KAGENT_CONFIG_JSON in the environment over the file path", () => {
     model: "m",
     baseUrl: "http://gw/v1",
     instruction: "i",
+    subAgents: [],
   });
 });
 
@@ -62,4 +63,36 @@ it("reads the control plane URL kagent puts under runtime", () => {
   const json = JSON.stringify({ runtime: { control_plane_url: "http://kagent-controller.kagent:8083" }, agent: {} });
   expect(loadRuntimeFromEnv({ KAGENT_CONFIG_JSON: json })).toEqual({ controlPlaneUrl: "http://kagent-controller.kagent:8083" });
   expect(loadRuntimeFromEnv({ KAGENT_CONFIG_JSON: JSON.stringify({ agent: {} }) })).toEqual({ controlPlaneUrl: undefined });
+});
+
+it("reads subagent definitions from agent.sub_agents, each with its own model and instruction", () => {
+  const json = JSON.stringify({
+    agent: {
+      model: { model: "main", openai: { base_url: "http://gw/v1" } },
+      sub_agents: [
+        { name: "explorer", description: "reads", instruction: "Explore.", model: { model: "cheap" } },
+        { name: "executor", description: "writes", instruction: "Execute.", model: { model: "strong", openai: { base_url: "http://other/v1" } } },
+      ],
+    },
+  });
+  expect(loadConfigFromEnv({ KAGENT_CONFIG_JSON: json }).subAgents).toEqual([
+    { name: "explorer", description: "reads", instruction: "Explore.", model: "cheap", baseUrl: "http://gw/v1" },
+    { name: "executor", description: "writes", instruction: "Execute.", model: "strong", baseUrl: "http://other/v1" },
+  ]);
+});
+
+it("fails with the entry index and key names when a subagent has no name or model", () => {
+  const secret = "sk-secret-value-456";
+  const json = JSON.stringify({
+    agent: { model: { model: "m", openai: { base_url: "http://gw/v1" } }, sub_agents: [{ description: secret }] },
+  });
+  try {
+    loadConfigFromEnv({ KAGENT_CONFIG_JSON: json });
+    expect.unreachable();
+  } catch (err) {
+    const msg = (err as Error).message;
+    expect(msg).toMatch(/sub_agents\[0\]/);
+    expect(msg).toContain("description");
+    expect(msg).not.toContain(secret);
+  }
 });
