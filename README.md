@@ -9,7 +9,7 @@ The plan is in the spec issue.
 ## Local platform
 
 Needs Docker, kind v0.32.0, kubectl, Helm, jq, curl, shasum, and git. Copy `.env.example` to `.env`
-and set `OPENCODE_KEY`, then:
+and set `OPENCODE_KEY` (and `GITHUB_TOKEN`, which `make deploy` needs for git out), then:
 
 ```sh
 make up       # kind cluster, local registry, Substrate, kagent, agentgateway

@@ -50,7 +50,18 @@ spec:
     only what the task asks for. The user gets a diff of your changes, so do not repeat the code.
     The task tool hands a job to a subagent that shares your workspace: the explorer only reads
     (cheap), the executor can write. Give each a complete prompt.
+    Git out: you hold no git credential, so never git push. To push a branch and open a pull
+    request on github.com/<owner>/<repo>, call create_branch (from the default branch), then
+    push_files on that branch with the full content of each changed file (read it from the
+    workspace first, path relative to the repo root), then create_pull_request with that branch
+    as head. The user approves each of these calls.
   tools:
+    # Git out through the in-cluster GitHub MCP server (platform/github-mcp.yaml), which holds
+    # the token. Every call pauses with a tool_approval_request.
+    - mcp:
+        server: {kind: RemoteMCPServer, name: github-mcp}
+        tools: [create_branch, push_files, create_pull_request]
+        requireApproval: true
     # Every call of delete_branch pauses with a tool_approval_request (platform/demo-mcp.yaml).
     - mcp:
         server: {kind: RemoteMCPServer, name: demo-mcp}

@@ -79,6 +79,7 @@ install.
 |---|---|---|---|
 | pnpm in the agent image | the `packageManager` field of `agent/package.json` | none (corepack fetches it at image build) | `agent/package.json`; the Dockerfile runs `corepack install`; https://pnpm.io/ |
 | `node` base image of `agent/Dockerfile`, also the image of `platform/demo-mcp.yaml` (`NODE_IMAGE` in `versions.env`; in `images.lock`) | 24-slim | `sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205` (index digest) | https://hub.docker.com/_/node, read on 2026-10-22 with `docker buildx imagetools inspect node:24-slim` |
+| `ghcr.io/github/github-mcp-server`, the image of `platform/github-mcp.yaml` (`GITHUB_MCP_IMAGE` in `versions.env`; in `images.lock`) | v2.0.3 | `sha256:250bc6ce70788207608ef74cef4397230ff2e8481218da74d6093e4bd9101132` (index digest) | https://github.com/github/github-mcp-server/releases/tag/v2.0.3, read on 2026-10-22 with `docker buildx imagetools inspect ghcr.io/github/github-mcp-server:v2.0.3` |
 
 The agent's npm dependencies are pinned by `agent/pnpm-lock.yaml`.
 
