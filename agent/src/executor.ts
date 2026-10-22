@@ -12,10 +12,11 @@ import { gatewayModel } from "./gateway.ts";
 import { askUserMessage, parseAskUserResponse, parseToolApprovalResponse, type Question, toolApprovalMessage } from "./hitl.ts";
 import { createLocalSandbox } from "./local-sandbox.ts";
 import { log } from "./log.ts";
+import { createTodoTool, formatTodos, TODO_TOOL, type TodoHolder } from "./todo-tool.ts";
 import { createSkillTool, discoverSkills, type Skill } from "./skills.ts";
 import { readIfExists, type Sandbox, type SandboxHooks, withHooks } from "./sandbox.ts";
 import { AGENTS_MD_FILE, ASK_USER_TOOL, buildSystemPrompt } from "./system-prompt.ts";
-import { type AskUserPause, loadSession, saveSession, type SessionState, type ToolApprovalPause, workspaceDir } from "./session-state.ts";
+import { type AskUserPause, loadSession, saveSession, type SessionState, type Todo, type ToolApprovalPause, workspaceDir } from "./session-state.ts";
 import { openMcpTools } from "./mcp-tools.ts";
 import { type ApprovalGate, createShellTool, SHELL_TOOL } from "./shell-tool.ts";
 import { createTaskTool } from "./subagents.ts";
@@ -189,9 +190,9 @@ export function createExecutor(
   };
 
   /** The system prompt for this turn: config, runtime facts, contract, and the workspace's AGENTS.md. */
-  async function turnInstructions(sandbox: Sandbox, taskId: string, tools: object, workspace: string, skills: Skill[]): Promise<string> {
+  async function turnInstructions(sandbox: Sandbox, taskId: string, tools: object, workspace: string, skills: Skill[], todos: Todo[]): Promise<string> {
     const agentsMd = await readIfExists(sandbox, AGENTS_MD_FILE);
-    const prompt = buildSystemPrompt({ instruction: config.instruction, toolNames: Object.keys(tools), workspace, maxSteps: opts.maxSteps, agentsMd, skills });
+    const prompt = buildSystemPrompt({ instruction: config.instruction, toolNames: Object.keys(tools), workspace, maxSteps: opts.maxSteps, agentsMd, skills, todos });
     log("system-prompt", { taskId, agentsMd: agentsMd ? "yes" : "no", skills: skills.map((s) => s.name).join(","), prompt: JSON.stringify(prompt) });
     return prompt;
   }
@@ -204,22 +205,24 @@ export function createExecutor(
     const sandbox = await sandboxFor(contextId);
     const turn = await startTurn(ctx, bus, loaded, sandbox);
     if (!turn) return;
-    const session: SessionState = turn.approvedKinds.length > 0 ? { ...loaded, approvedKinds: turn.approvedKinds } : loaded;
-    const result = await generateTurn(ctx, sandbox, turn, session);
+    const base: SessionState = turn.approvedKinds.length > 0 ? { ...loaded, approvedKinds: turn.approvedKinds } : loaded;
+    const todos: TodoHolder = { list: loaded.todos };
+    const result = await generateTurn(ctx, sandbox, turn, base, todos);
+    const session: SessionState = { ...base, todos: todos.list };
     const ids = { taskId, contextId };
     if (pauseOnApproval(bus, ids, session, turn, result)) return;
     if (pauseOnAskUser(bus, ids, session, turn, result)) return;
     saveSession(dataDir, contextId, { ...session, messages: [...turn.messages, ...result.response.messages], pending: undefined });
-    await publishReply(bus, ids, sandbox, turn.changes, result);
+    await publishReply(bus, ids, sandbox, turn.changes, result, session.todos);
   }
 
   /** Runs the turn with this turn's MCP clients open, and closes them after. */
-  async function generateTurn(ctx: RequestContext, sandbox: Sandbox, turn: Turn, session: SessionState): Promise<TurnResult> {
+  async function generateTurn(ctx: RequestContext, sandbox: Sandbox, turn: Turn, session: SessionState, todos: TodoHolder): Promise<TurnResult> {
     const skills = await discoverSkills(sandbox);
     const gate = turnGate(turn.approvedCalls, turn.approvedKinds);
     const mcp = await openMcpTools(mcpBindings, gate);
     try {
-      return await runAgent(ctx, sandbox, turn, session, skills, gate, mcp.tools);
+      return await runAgent(ctx, sandbox, turn, session, todos, skills, gate, mcp.tools);
     } finally {
       await mcp.close();
     }
@@ -230,6 +233,7 @@ export function createExecutor(
     sandbox: Sandbox,
     turn: Turn,
     session: SessionState,
+    todos: TodoHolder,
     skills: Skill[],
     gate: ApprovalGate,
     mcpTools: Record<string, Tool>,
@@ -242,12 +246,13 @@ export function createExecutor(
         ...createFileTools(sandbox, turn.changes),
         [SHELL_TOOL]: createShellTool(sandbox, gate),
         [ASK_USER]: askUserTool,
+        [TODO_TOOL]: createTodoTool(todos),
         ...(skills.length > 0 ? { load_skill: createSkillTool(skills, taskId) } : {}),
         ...(config.subAgents.length > 0 ? { task: createTaskTool(config.subAgents, { sandbox, changes: turn.changes, taskId, opts }) } : {}),
       },
       opts.maxToolOutputChars,
     );
-    const instructions = await turnInstructions(sandbox, taskId, tools, workspaceDir(dataDir, contextId), skills);
+    const instructions = await turnInstructions(sandbox, taskId, tools, workspaceDir(dataDir, contextId), skills, todos.list);
     const agent = new ToolLoopAgent({ model, instructions, tools, stopWhen: stepCountIs(opts.maxSteps) });
     let stepNumber = 0;
     return agent.generate({
@@ -259,7 +264,7 @@ export function createExecutor(
         stepNumber++;
         logStepUsage(taskId, stepNumber, step.usage);
         if (isPausingStep(step)) return;
-        saveSession(dataDir, contextId, { ...session, messages: [...turn.messages, ...step.response.messages] });
+        saveSession(dataDir, contextId, { ...session, todos: todos.list, messages: [...turn.messages, ...step.response.messages] });
       },
     });
   }
@@ -304,7 +309,7 @@ export function createExecutor(
   }
 
   /** The finished turn's reply and diff, then the completed status. */
-  async function publishReply(bus: ExecutionEventBus, ids: TurnIds, sandbox: Sandbox, changes: ChangeTracker, result: TurnResult): Promise<void> {
+  async function publishReply(bus: ExecutionEventBus, ids: TurnIds, sandbox: Sandbox, changes: ChangeTracker, result: TurnResult, todos: Todo[]): Promise<void> {
     const { taskId, contextId } = ids;
     const isAtStepLimit = result.finishReason === "tool-calls" && result.steps.length >= opts.maxSteps;
     if (isAtStepLimit) log("step-limit", { taskId, steps: result.steps.length });
@@ -312,6 +317,7 @@ export function createExecutor(
       ? `Stopped: the step limit (${opts.maxSteps} steps) was reached before the task was done. The diff shows the changes so far.`
       : result.text;
     publishArtifact(bus, taskId, contextId, "reply", textPart(reply));
+    if (todos.length > 0) publishArtifact(bus, taskId, contextId, "todos", textPart(`Todo list:\n${formatTodos(todos)}`));
     const diff = await changes.diff(sandbox);
     if (diff) publishArtifact(bus, taskId, contextId, "diff", textPart(diff, "text/x-diff"));
     publishStatus(bus, taskId, contextId, TaskState.TASK_STATE_COMPLETED);

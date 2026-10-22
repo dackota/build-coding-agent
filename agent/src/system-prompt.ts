@@ -1,3 +1,6 @@
+import type { Todo } from "./session-state.ts";
+import { formatTodos, TODO_TOOL } from "./todo-tool.ts";
+
 export type PromptFacts = {
   /** The system prompt from the kagent config. */
   instruction: string;
@@ -8,6 +11,8 @@ export type PromptFacts = {
   /** The workspace's AGENTS.md, when it has one. */
   agentsMd?: string;
   skills?: { name: string; description: string }[];
+  /** The session's todo list, shown to the model when it has items. */
+  todos?: readonly Todo[];
 };
 
 export const AGENTS_MD_FILE = "AGENTS.md";
@@ -20,6 +25,14 @@ const AMBIGUITY_RULE = [
   `Call ${ASK_USER_TOOL} once with the question and, when the answer is one of a few options, its choices; then use the answer.`,
   "Do not ask about facts you can find in the workspace.",
 ].join("\n");
+
+const SEARCH_FIRST_RULE = [
+  "Search first: find the code with search before you read anything, and read only the files you will change or need to understand a change. Do not read a whole directory.",
+  "For a task of three or more steps, keep a todo list with todo_write: plan first, then update it as each step starts and finishes.",
+].join("\n");
+
+const CLAIMS_RULE =
+  "Claims: tie each claim in your final answer to the check that proved it (the command you ran and its result, or the file you read). Say 'not checked' for anything you did not verify.";
 
 const VERIFICATION_CONTRACT = [
   "Verification contract: before you say a task is done, verify your changes with the project's own commands, in this order:",
@@ -41,7 +54,10 @@ export function buildSystemPrompt(facts: PromptFacts): string {
     ].join("\n"),
   );
   if (facts.toolNames.includes(ASK_USER_TOOL)) sections.push(AMBIGUITY_RULE);
+  sections.push(SEARCH_FIRST_RULE);
+  if (facts.todos && facts.todos.length > 0) sections.push(`Current todo list:\n${formatTodos(facts.todos)}`);
   sections.push(VERIFICATION_CONTRACT);
+  sections.push(CLAIMS_RULE);
   if (facts.skills && facts.skills.length > 0) {
     sections.push(
       [
