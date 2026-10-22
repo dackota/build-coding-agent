@@ -1,0 +1,31 @@
+# The hello byo agent. deploy.sh replaces @IMAGE@ with <registry kind-network address>:5000/hello-agent@sha256:<digest>.
+# No key lives here: the agent reaches the model through agentgateway via kagent's
+# default-model-config, and the gateway holds the key.
+apiVersion: api.kagent.dev/v1alpha3
+kind: Harness
+metadata: {name: hello-harness, namespace: kagent}
+spec:
+  byo: {}
+  workload:
+    image: @IMAGE@
+    command: ["node", "/app/src/main.ts"]
+  substrate:
+    workerPoolRef: {name: kagent-default}
+    snapshotPolicy:
+      location: gs://ate-snapshots/kagent/
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata: {name: hello-agent, namespace: kagent}
+spec:
+  description: Hello TypeScript byo agent
+  modelConfig: {name: default-model-config}
+  systemPrompt: You are a concise, helpful assistant. Reply briefly.
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata: {name: hello-agent, namespace: kagent}
+spec:
+  template:
+    ref: {name: hello-agent}
+  harnessRef: {name: hello-harness}

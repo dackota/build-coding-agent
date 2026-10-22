@@ -9,6 +9,8 @@ in `docs/pinned-versions.md`.
 | `make up` | `preflight.sh` (tools, versions, `OPENCODE_KEY`), then `cluster.sh up` (registry `registry:2` on `localhost:5001`, kind cluster `build-coding-agent` from kagent's kind config, registry joined to the `kind` network), then `install.sh` (Substrate and kagent through the pinned kagent CLI, Gateway API CRDs, agentgateway, the key Secret, and kagent's stock agent). Safe to run again. |
 | `make status` | One `ok` or `FAIL` line each for the cluster, the registry, Substrate, kagent, agentgateway, the model route, the stock agent, and the image pins. |
 | `make smoke` | Pushes a tiny image to `localhost:5001`, applies Harness `registry-smoke` with `image@sha256:<digest>`, and sends one message to `stock-agent` through agentgateway (spends model tokens). |
+| `make deploy` | `deploy.sh`: builds `agent/`, pushes it through `localhost:5001`, reads the sha256 digest from the registry, and applies `agent.yaml.tmpl` (Harness, AgentTemplate, Agent `hello-agent`) with the image named by that digest. Waits for the Agent to be Ready. |
+| `make chat MSG=...` | Sends one message to `hello-agent` through the kagent controller (the agent CLI in `agent/`). |
 | `make down` | Deletes the cluster and the registry container. |
 
 The kube context is `kind-build-coding-agent`. Scripts call `kubectl --context` and
@@ -30,4 +32,6 @@ only a placeholder key: its `default-model-config` points at the gateway's `/v1`
 - `kagent-values.yaml`: kagent chart values (model through the gateway).
 - `gateway.yaml`: the Gateway, the OpenCode Go backend, and the `/v1` route.
 - `stock-agent.yaml`: Harness `kagent-stock` (kagent's built-in runtime), AgentTemplate and Agent `stock-agent`.
+- `agent.yaml.tmpl`: the hello byo agent (Harness, AgentTemplate, Agent). No key: the agent reaches the model through `default-model-config` and the gateway.
+- `deploy.sh`: builds and pins the agent image. The Harness names the image by the registry's address on the kind network (for example `172.19.0.3:5000/hello-agent@sha256:...`), not `localhost:5001`: Substrate's atelet pulls images from inside the cluster, where `localhost:5001` is not the registry, and it speaks plain HTTP only to a private IP.
 - `images.lock`: every image the platform runs, by digest.

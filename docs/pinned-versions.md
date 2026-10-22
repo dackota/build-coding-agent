@@ -73,6 +73,14 @@ install.
 | `cr.agentgateway.dev/controller` | v1.6.0 | `sha256:d84259a7e2d87f8f39bae385d4b032d823c0a4450aecb32e0e31e2258449645b` | cr.agentgateway.dev |
 | Substrate control images, kagent-tools, and the rest | see `platform/images.lock` | read from the running pods' `imageID` | the live cluster |
 
+## The agent image
+
+| Part | Version | Digest | Source |
+|---|---|---|---|
+| `node` base image of `agent/Dockerfile` | 24-slim | `sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205` (index digest) | https://hub.docker.com/_/node, read on 2026-10-22 with `docker buildx imagetools inspect node:24-slim` |
+
+The agent's npm dependencies are pinned by `agent/pnpm-lock.yaml`.
+
 ## kagent v1.0.0-alpha17
 
 alpha17 (released 2026-10-21) is the version installed, so no fallback to an older
