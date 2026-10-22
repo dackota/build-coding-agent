@@ -10,6 +10,7 @@ import { createFileTools } from "./file-tools.ts";
 import { askUserMessage, parseAskUserResponse, type Question } from "./hitl.ts";
 import { createLocalSandbox } from "./local-sandbox.ts";
 import { log } from "./log.ts";
+import { createSkillTool, discoverSkills, type Skill } from "./skills.ts";
 import { readIfExists, type Sandbox } from "./sandbox.ts";
 import { AGENTS_MD_FILE, buildSystemPrompt } from "./system-prompt.ts";
 import { loadSession, type PendingPause, saveSession, workspaceDir } from "./session-state.ts";
@@ -107,10 +108,10 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
   };
 
   /** The system prompt for this turn: config, runtime facts, contract, and the workspace's AGENTS.md. */
-  async function turnInstructions(sandbox: Sandbox, taskId: string, tools: object, workspace: string): Promise<string> {
+  async function turnInstructions(sandbox: Sandbox, taskId: string, tools: object, workspace: string, skills: Skill[]): Promise<string> {
     const agentsMd = await readIfExists(sandbox, AGENTS_MD_FILE);
-    const prompt = buildSystemPrompt({ instruction: config.instruction, toolNames: Object.keys(tools), workspace, maxSteps: opts.maxSteps, agentsMd });
-    log("system-prompt", { taskId, agentsMd: agentsMd ? "yes" : "no", prompt: JSON.stringify(prompt) });
+    const prompt = buildSystemPrompt({ instruction: config.instruction, toolNames: Object.keys(tools), workspace, maxSteps: opts.maxSteps, agentsMd, skills });
+    log("system-prompt", { taskId, agentsMd: agentsMd ? "yes" : "no", skills: skills.map((s) => s.name).join(","), prompt: JSON.stringify(prompt) });
     return prompt;
   }
 
@@ -148,8 +149,9 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
       messages = [...history, { role: "user", content: `${text}${listing}` }];
     }
 
-    const tools = { ...createFileTools(sandbox, changes), [ASK_USER]: askUserTool };
-    const instructions = await turnInstructions(sandbox, taskId, tools, workspaceDir(dataDir, contextId));
+    const skills = await discoverSkills(sandbox);
+    const tools = { ...createFileTools(sandbox, changes), [ASK_USER]: askUserTool, ...(skills.length > 0 ? { load_skill: createSkillTool(skills, taskId) } : {}) };
+    const instructions = await turnInstructions(sandbox, taskId, tools, workspaceDir(dataDir, contextId), skills);
     const agent = new ToolLoopAgent({
       model,
       instructions,
@@ -161,12 +163,12 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
       // Save after every step, so a crash mid-turn keeps the steps that finished. A step that
       // calls ask_user is saved as the pause below instead: its call has no result yet.
       onStepFinish: (step) => {
-        if (step.toolCalls.some((c) => c.toolName === ASK_USER)) return;
+        if (step.toolCalls.some((c) => c?.toolName === ASK_USER)) return;
         saveSession(dataDir, contextId, { ...session, messages: [...messages, ...step.response.messages] });
       },
     });
 
-    const call = result.toolCalls.find((c) => c.toolName === ASK_USER);
+    const call = result.toolCalls.find((c) => c?.toolName === ASK_USER);
     if (call) {
       const questions = (call.input as { questions: Question[] }).questions;
       const paused: PendingPause = {

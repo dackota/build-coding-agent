@@ -7,6 +7,7 @@ export type PromptFacts = {
   maxSteps: number;
   /** The workspace's AGENTS.md, when it has one. */
   agentsMd?: string;
+  skills?: { name: string; description: string }[];
 };
 
 export const AGENTS_MD_FILE = "AGENTS.md";
@@ -31,6 +32,14 @@ export function buildSystemPrompt(facts: PromptFacts): string {
     ].join("\n"),
   );
   sections.push(VERIFICATION_CONTRACT);
+  if (facts.skills && facts.skills.length > 0) {
+    sections.push(
+      [
+        "Skills (call load_skill with the name to read one in full before doing work it covers, then follow it):",
+        ...facts.skills.map((s) => `- ${s.name}: ${s.description}`),
+      ].join("\n"),
+    );
+  }
   const rules = facts.agentsMd?.trim();
   if (rules) {
     sections.push(`Project rules (from ${AGENTS_MD_FILE} in the workspace; follow them):\n${rules}`);
