@@ -1,0 +1,2 @@
+# The platform scripts source platform/lib.sh and platform/versions.env.
+external-sources=true

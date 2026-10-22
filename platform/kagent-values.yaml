@@ -1,0 +1,21 @@
+# kagent chart values for `kagent install` (platform/install.sh). Image digests come
+# from platform/versions.env through a generated second values file, applied after this.
+config:
+  server:
+    # The install guide's one value: lets grpcurl and the kagent CLI list services.
+    grpcReflection: true
+# The chart's default ModelConfig (default-model-config) goes to the model through
+# agentgateway only. agentgateway holds the OpenCode Go key; the kagent-openai Secret
+# holds a placeholder that the gateway ignores. kagent needs the /v1 suffix.
+providers:
+  default: openAI
+  openAI:
+    provider: OpenAI
+    model: glm-5.3-flash
+    apiKeySecretRef: kagent-openai
+    apiKeySecretKey: OPENAI_API_KEY
+    config:
+      baseUrl: http://agentgateway-proxy.agentgateway-system.svc.cluster.local/v1
+# Not used here, and one image fewer to pin.
+grafana-mcp:
+  enabled: false

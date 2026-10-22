@@ -1,0 +1,52 @@
+# agentgateway in front of the OpenCode Go plan (OpenAI-compatible chat completions).
+# The gateway holds the key: Secret opencode-go-key, made by platform/install.sh from
+# OPENCODE_KEY in .env. kagent's default-model-config points at this Gateway's /v1.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: {name: agentgateway-proxy, namespace: agentgateway-system}
+spec:
+  gatewayClassName: agentgateway
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces: {from: All}
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata: {name: opencode-go, namespace: agentgateway-system}
+spec:
+  ai:
+    groups:
+    - providers:
+      - name: opencode-go
+        openai: {}
+        host: opencode.ai
+        port: 443
+        path: /zen/go/v1/chat/completions
+        policies:
+          tls: {sni: opencode.ai}
+          auth:
+            secretRef: {name: opencode-go-key}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: opencode-go, namespace: agentgateway-system}
+spec:
+  parentRefs:
+  - {name: agentgateway-proxy, sectionName: http}
+  rules:
+  - matches:
+    - path: {type: PathPrefix, value: /v1}
+    filters:
+    # OpenCode Go asks clients for their own user agent and a session header.
+    - type: RequestHeaderModifier
+      requestHeaderModifier:
+        set:
+        - {name: user-agent, value: build-coding-agent/0.1}
+        - {name: x-opencode-session, value: build-coding-agent}
+    backendRefs:
+    - group: agentgateway.dev
+      kind: AgentgatewayBackend
+      name: opencode-go

@@ -1,0 +1,55 @@
+# Copied unchanged (below this header) from kagent's own kind config:
+# https://github.com/kagent-dev/kagent/blob/v1.0.0-alpha17/scripts/kind/kind-config.yaml
+# tag v1.0.0-alpha17, commit 8392184232e9c78196433a34b1fd3b33db5fcb97.
+# platform/cluster.sh passes --name build-coding-agent, which overrides `name` below,
+# and --image from platform/versions.env.
+########################################################################
+#  https://kind.sigs.k8s.io/docs/user/configuration/
+########################################################################
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: kagent
+containerdConfigPatches:
+- |-
+  [plugins."io.containerd.grpc.v1.cri".registry]
+    config_path = "/etc/containerd/certs.d"
+# network configuration
+networking:
+  # WARNING: It is _strongly_ recommended that you keep this the default
+  # (127.0.0.1) for security reasons. However, it is possible to change this.
+  apiServerAddress: "127.0.0.1"
+  # By default, the API server listens on a random open port.
+  # You may choose a specific port but probably don't need to in most cases.
+  # Using a random port makes it easier to spin up multiple clusters.
+  # apiServerPort: 6443
+
+# Substrate WorkerPools project pod identities and trust bundles into ateom.
+featureGates:
+  ClusterTrustBundle: true
+  ClusterTrustBundleProjection: true
+  PodCertificateRequest: true
+
+# this may be used to e.g. disable beta / alpha APIs.
+runtimeConfig:
+  "api/alpha": "false"
+  "certificates.k8s.io/v1beta1": "true"
+
+# add to the apiServer certSANs the name of the docker (dind) service in order to be able to reach the cluster through it
+kubeadmConfigPatchesJSON6902:
+  - group: kubeadm.k8s.io
+    version: v1beta2
+    kind: ClusterConfiguration
+    patch: |
+      - op: add
+        path: /apiServer/certSANs/-
+        value: docker
+
+# this is the default configuration for nodes
+nodes:
+  - role: control-plane
+# Example of port mappings for the control-plane node
+#    extraPortMappings:
+#      - containerPort: 30884
+#        hostPort: 30884
+#      - containerPort: 30885
+#        hostPort: 30885
