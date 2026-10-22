@@ -1,7 +1,7 @@
 // What a turn changed in the workspace, as a unified diff. The file tools record each file's
 // content before their first write in the turn; the diff compares that with the file now.
 import { createTwoFilesPatch } from "diff";
-import { relativeInWorkspace, type Sandbox } from "./sandbox.ts";
+import { readIfExists, relativeInWorkspace, type Sandbox } from "./sandbox.ts";
 
 /** Workspace-relative path to its content before the turn's first write, or null when it did not exist. */
 export type Baseline = Record<string, string | null>;
@@ -38,7 +38,7 @@ export class ChangeTracker {
     const patches: string[] = [];
     for (const path of [...this.before.keys()].sort()) {
       const old = this.before.get(path) ?? null;
-      const now = await sandbox.readFile(path).catch(() => null);
+      const now = (await readIfExists(sandbox, path)) ?? null;
       if (old === now) continue;
       const patch = createTwoFilesPatch(old === null ? "/dev/null" : `a/${path}`, now === null ? "/dev/null" : `b/${path}`, old ?? "", now ?? "", "", "");
       // jsdiff opens each patch with a "====" rule; unified diff tools do not need it.

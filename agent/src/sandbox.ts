@@ -41,3 +41,15 @@ export function relativeInWorkspace(path: string): string {
 export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
+
+/** The file's text, or undefined when it does not exist. Any other failure (outside the workspace, permissions) is thrown. */
+export async function readIfExists(sandbox: Sandbox, path: string): Promise<string | undefined> {
+  try {
+    return await sandbox.readFile(path);
+  } catch (err) {
+    // The in-memory sandbox (just-bash) sets no `code`, only the message prefix.
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === "ENOENT" || (e.code === undefined && e.message.startsWith("ENOENT:"))) return undefined;
+    throw err;
+  }
+}

@@ -10,7 +10,8 @@ import { createFileTools } from "./file-tools.ts";
 import { askUserMessage, parseAskUserResponse, type Question } from "./hitl.ts";
 import { createLocalSandbox } from "./local-sandbox.ts";
 import { log } from "./log.ts";
-import type { Sandbox } from "./sandbox.ts";
+import { readIfExists, type Sandbox } from "./sandbox.ts";
+import { AGENTS_MD_FILE, buildSystemPrompt } from "./system-prompt.ts";
 import { clearPending, loadPending, type PendingPause, savePending, workspaceDir } from "./session-state.ts";
 import { ChangeTracker } from "./workspace-diff.ts";
 
@@ -105,6 +106,14 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
     },
   };
 
+  /** The system prompt for this turn: config, runtime facts, contract, and the workspace's AGENTS.md. */
+  async function turnInstructions(sandbox: Sandbox, taskId: string, tools: object, workspace: string): Promise<string> {
+    const agentsMd = await readIfExists(sandbox, AGENTS_MD_FILE);
+    const prompt = buildSystemPrompt({ instruction: config.instruction, toolNames: Object.keys(tools), workspace, maxSteps: opts.maxSteps, agentsMd });
+    log("system-prompt", { taskId, agentsMd: agentsMd ? "yes" : "no", prompt: JSON.stringify(prompt) });
+    return prompt;
+  }
+
   async function run(ctx: RequestContext, bus: ExecutionEventBus): Promise<void> {
     const { taskId, contextId } = ctx;
     const pending = loadPending(dataDir, contextId);
@@ -136,10 +145,12 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
       messages = [{ role: "user", content: `${text}${listing}` }];
     }
 
+    const tools = { ...createFileTools(sandbox, changes), [ASK_USER]: askUserTool };
+    const instructions = await turnInstructions(sandbox, taskId, tools, workspaceDir(dataDir, contextId));
     const agent = new ToolLoopAgent({
       model,
-      instructions: config.instruction || undefined,
-      tools: { ...createFileTools(sandbox, changes), [ASK_USER]: askUserTool },
+      instructions,
+      tools,
       stopWhen: stepCountIs(opts.maxSteps),
     });
     const result = await agent.generate({ messages });
