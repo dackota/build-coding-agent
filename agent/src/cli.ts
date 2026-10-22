@@ -13,7 +13,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
-import { sendTurn, type Turn } from "./a2a-client.ts";
+import { cancelTask, sendTurn, type StreamEvent, type Turn } from "./a2a-client.ts";
 import type { ApprovalDecision } from "./hitl.ts";
 
 const CONTEXT = "kind-build-coding-agent";
@@ -55,13 +55,13 @@ const RETRY_WINDOW_MS = 120_000;
 const RETRY_DELAY_MS = 3_000;
 
 /** The controller answers "retry after the session becomes available" while the agent's actor wakes. */
-async function sendWithRetry(send: () => Promise<Turn>): Promise<Turn> {
+async function sendWithRetry(send: () => Promise<Turn>, signal: AbortSignal): Promise<Turn> {
   const deadline = Date.now() + RETRY_WINDOW_MS;
   for (;;) {
     try {
       return await send();
     } catch (err) {
-      if (!/retry after/i.test((err as Error).message) || Date.now() > deadline) throw err;
+      if (signal.aborted || !/retry after/i.test((err as Error).message) || Date.now() > deadline) throw err;
       await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
     }
   }
@@ -130,7 +130,7 @@ function parseArgs(argv: string[]): Args {
   };
 }
 
-function printTurn(turn: Turn): void {
+function printTurn(turn: Turn, hasStreamedText: boolean): void {
   if (turn.state === "failed") throw new Error(`the agent failed: ${turn.text}`);
   if (turn.approval) {
     console.log(`tool_approval_request: ${turn.approval.hint}`);
@@ -139,8 +139,10 @@ function printTurn(turn: Turn): void {
     return;
   }
   if (!turn.pause) {
-    if (!turn.text) throw new Error("the agent sent an empty reply");
-    console.log(turn.text);
+    if (!turn.text && !hasStreamedText) throw new Error("the agent sent an empty reply");
+    // Streamed text is already on screen: print only what follows the reply (the diff).
+    const rest = hasStreamedText ? (turn.artifactTexts ?? []).slice(1).join("\n") : turn.text;
+    if (rest) console.log(rest);
     // On stderr, so stdout stays the reply: the id to continue this session with --context.
     if (turn.contextId) console.error(`context=${turn.contextId}`);
     return;
@@ -179,15 +181,57 @@ try {
   console.error(`cannot read an attached file: ${(err as Error).message}`);
   process.exit(2);
 }
+const CTRL_C_EXIT_CODE = 130;
+const ARGS_PREVIEW_CHARS = 120;
 const namespace = process.env.AGENT_NAMESPACE ?? "kagent";
 const agent = process.env.AGENT ?? "hello-agent";
 const forward = process.env.KAGENT_URL ? undefined : await openForward(namespace);
+const baseUrl = process.env.KAGENT_URL || forward!.baseUrl;
+const abort = new AbortController();
+let ids: { taskId: string; contextId: string } | undefined = contextId ? { taskId: "", contextId } : undefined;
+let hasStreamedText = false;
+let isAtLineStart = true;
+
+/** Text goes out as it streams; a tool call gets its own line when it starts. */
+function show(event: StreamEvent): void {
+  if (event.type === "text_delta") {
+    process.stdout.write(event.text);
+    hasStreamedText = true;
+    isAtLineStart = event.text.endsWith("\n");
+    return;
+  }
+  const args = JSON.stringify(event.args ?? {});
+  process.stdout.write(`${isAtLineStart ? "" : "\n"}> ${event.name} ${args.length > ARGS_PREVIEW_CHARS ? `${args.slice(0, ARGS_PREVIEW_CHARS)}...` : args}\n`);
+  isAtLineStart = true;
+}
+
+/** Ctrl-C: stop the turn on the agent (the session keeps the finished steps), say how to continue, leave. */
+let isInterrupted = false;
+process.once("SIGINT", () => {
+  isInterrupted = true;
+  abort.abort();
+  void (async () => {
+    if (ids?.taskId) {
+      await cancelTask({ baseUrl, namespace, agent, taskId: ids.taskId }).catch((err: Error) => console.error(`could not cancel the turn: ${err.message}`));
+    }
+    if (ids?.contextId) console.error(`\ncontext=${ids.contextId}\ninterrupted; continue with: --context ${ids.contextId} "<message>"`);
+    forward?.child.kill();
+    process.exit(CTRL_C_EXIT_CODE);
+  })();
+});
+
 try {
-  const baseUrl = process.env.KAGENT_URL || forward!.baseUrl;
-  printTurn(await sendWithRetry(() => sendTurn({ baseUrl, namespace, agent, text, files, contextId, reply, approval })));
+  const turn = await sendWithRetry(
+    () => sendTurn({ baseUrl, namespace, agent, text, files, contextId, reply, approval, onEvent: show, onIds: (got) => (ids = got), signal: abort.signal }),
+    abort.signal,
+  );
+  if (hasStreamedText && !isAtLineStart) process.stdout.write("\n");
+  printTurn(turn, hasStreamedText);
 } catch (err) {
-  console.error((err as Error).message);
-  process.exitCode = 1;
+  if (!isInterrupted) {
+    console.error((err as Error).message);
+    process.exitCode = 1;
+  }
 } finally {
-  forward?.child.kill();
+  if (!isInterrupted) forward?.child.kill();
 }

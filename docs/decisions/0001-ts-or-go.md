@@ -71,14 +71,23 @@ So kagent compiles the subagent into `KAGENT_CONFIG_JSON` under `agent.sub_agent
 instruction and model. The `byo` image gets the definition; it must implement the delegation
 itself (nothing in kagent calls the subagent for a `byo` harness).
 
-### 4. The kagent UI and the pause: not checked
+### 4. The kagent UI and the pause: yes, for the same user (S13 check)
 
-No browser was driven. What is known: kagent's UI source (`ui/src/api/chat/hitl.ts`) reads the
-pause from the status message's `metadata[<extension URI>]` with `type: ask_user_request`, an
-`id`, and `questions`, and only when the message lists the extension URI in `extensions`.
-The agent sends exactly that shape (the CLI parses it back from the controller's reply). The
-agent card does not declare the extension, as the spec expects. Whether the UI renders it
-is left to a later ticket with a browser check.
+Checked in a headless Chrome (playwright-core) against `svc/kagent-ui:8080`, with the CLI
+making a session that ends in an open `ask_user` pause:
+
+- **Same session: yes, but only for the same user.** Sessions belong to the `X-User-Id` of the
+  caller. The CLI defaults to `cli@build-coding-agent`; with that id the UI's `hello-agent`
+  page said "No conversations yet". With `KAGENT_USER_ID=admin@kagent.dev` (the user the UI
+  signs in as) the same CLI turn is listed under CHATS on `/agents/kagent/hello-agent/new`.
+- **The pause: yes.** Clicking that chat opens `/agents/<session>/chat`, which shows the user's
+  message, "The agent asked you something and is waiting", the question "Which colour should
+  the button be?", the choices red and blue, and "Send answer" / "Discard the question". So the
+  UI renders the `ask_user_request` the agent sends. Answering from the UI was not tried.
+- Steps: `KAGENT_USER_ID=admin@kagent.dev pnpm --dir agent run cli -- "Use the ask_user tool to
+  ask me which colour the button should be, choices red or blue."`, port-forward `svc/kagent-ui`,
+  open `/agents/kagent/hello-agent/new`, click the chat. Screenshots:
+  `.scratch/s2-spike/verify/14-r2/ui-chats-list.png` and `ui-session.png`.
 
 ### 5. What Go would give for free
 

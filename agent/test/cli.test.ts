@@ -246,3 +246,87 @@ it("answers a tool approval pause with each decision of the union", async () => 
     { type: "tool_approval_response", approvals: [{ id: "appr-1", approved: true, scope: "session" }] },
   ]);
 });
+
+const EVENT_KEY = "build-coding-agent/event";
+const sse = (result: unknown) => `data: ${JSON.stringify({ jsonrpc: "2.0", id: 1, result })}\n\n`;
+const working = (event: unknown, text = "") => ({
+  statusUpdate: { taskId: "t-1", contextId: "c-1", status: { state: "TASK_STATE_WORKING", message: { role: "ROLE_AGENT", parts: [{ text }], metadata: { [EVENT_KEY]: event } } } },
+});
+
+async function stubStream(chunks: string[]) {
+  const seen: { headers: Record<string, unknown>; body: any }[] = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      seen.push({ headers: req.headers, body: JSON.parse(body) });
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(chunks.join(""));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as AddressInfo;
+  return { baseUrl: `http://127.0.0.1:${port}`, seen, close: () => server.close() };
+}
+
+it("streams text deltas and tool calls to the caller as they arrive", async () => {
+  const stub = await stubStream([
+    sse({ task: { id: "t-1", contextId: "c-1", status: { state: "TASK_STATE_WORKING" } } }),
+    sse(working({ type: "tool_call", name: "read_file", args: { path: "a.txt" } })),
+    sse(working({ type: "text_delta", text: "Hel" }, "Hel")),
+    sse(working({ type: "text_delta", text: "lo" }, "lo")),
+    sse({ artifactUpdate: { taskId: "t-1", contextId: "c-1", artifact: { name: "reply", parts: [{ text: "Hello" }] }, lastChunk: true } }),
+    sse({ statusUpdate: { taskId: "t-1", contextId: "c-1", status: { state: "TASK_STATE_COMPLETED" } } }),
+  ]);
+  const events: unknown[] = [];
+  const turn = await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "hi", onEvent: (e) => events.push(e) });
+  stub.close();
+
+  expect(events).toEqual([
+    { type: "tool_call", name: "read_file", args: { path: "a.txt" } },
+    { type: "text_delta", text: "Hel" },
+    { type: "text_delta", text: "lo" },
+  ]);
+  expect(turn).toMatchObject({ state: "completed", taskId: "t-1", contextId: "c-1", text: "Hello" });
+});
+
+it("streaming send also carries the HITL header and uses SendStreamingMessage", async () => {
+  const stub = await stubStream([sse({ statusUpdate: { taskId: "t-1", contextId: "c-1", status: { state: "TASK_STATE_COMPLETED" } } })]);
+  await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "hi", onEvent: () => {} });
+  stub.close();
+
+  expect(stub.seen[0]?.body.method).toBe("SendStreamingMessage");
+  expect(stub.seen[0]?.headers["a2a-extensions"]).toBe(HITL_URI);
+});
+
+it("reads a pause from a stream", async () => {
+  const stub = await stubStream([
+    sse({
+      statusUpdate: {
+        taskId: "task-9",
+        contextId: "ctx-9",
+        status: { state: "TASK_STATE_INPUT_REQUIRED", message: PAUSED.result.task.status.message },
+      },
+    }),
+  ]);
+  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "hi", onEvent: () => {} });
+  stub.close();
+
+  expect(got.state).toBe("input-required");
+  expect(got.pause?.requestId).toBe("req-1");
+  expect(got.taskId).toBe("task-9");
+});
+
+it("reads a pause from the task snapshot that ends a stream", async () => {
+  const stub = await stubStream([
+    sse(working({ type: "tool_call", name: "ask_user", args: {} })),
+    sse({ task: PAUSED.result.task }),
+  ]);
+  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "hi", onEvent: () => {} });
+  stub.close();
+
+  expect(got.state).toBe("input-required");
+  expect(got.pause?.requestId).toBe("req-1");
+  expect(got.taskId).toBe("task-9");
+  expect(got.contextId).toBe("ctx-9");
+});

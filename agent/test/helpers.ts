@@ -31,7 +31,7 @@ export type FakeModel = {
   close: () => Promise<void>;
 };
 
-export type ScriptedReply = string | { toolCall: { name: string; args: unknown } } | { error: number };
+export type ScriptedReply = string | { toolCall: { name: string; args: unknown } } | { error: number } | { hang: true };
 
 /**
  * An OpenAI-compatible chat completions stub that plays `script` in order (the last entry
@@ -52,6 +52,33 @@ export async function startFakeModel(script: ScriptedReply | ScriptedReply[] = S
         return;
       }
       const reply = replies[index]!;
+      if (typeof reply === "object" && "hang" in reply) {
+        // Never answers until the caller disconnects: a turn the test cancels.
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(": waiting\n\n");
+        return;
+      }
+      if (JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}").stream === true && !(typeof reply === "object" && "error" in reply)) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        const chunk = (delta: object, finish: string | null) =>
+          `data: ${JSON.stringify({ id: "chatcmpl-fake", object: "chat.completion.chunk", created: 1, model: "scripted-model", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+        if (typeof reply === "string") {
+          // Two text deltas, so a streaming client sees the reply arrive in pieces.
+          const mid = Math.ceil(reply.length / 2);
+          res.write(chunk({ role: "assistant", content: reply.slice(0, mid) }, null));
+          res.write(chunk({ content: reply.slice(mid) }, null));
+          res.write(chunk({}, "stop"));
+        } else {
+          const call = { index: 0, id: `call_${index}`, type: "function", function: { name: reply.toolCall.name, arguments: JSON.stringify(reply.toolCall.args) } };
+          res.write(chunk({ role: "assistant", content: null, tool_calls: [call] }, null));
+          res.write(chunk({}, "tool_calls"));
+        }
+        res.write(
+          `data: ${JSON.stringify({ id: "chatcmpl-fake", object: "chat.completion.chunk", created: 1, model: "scripted-model", choices: [], usage: { prompt_tokens: 3, completion_tokens: 5, total_tokens: 8, prompt_tokens_details: { cached_tokens: 2 } } })}\n\n`,
+        );
+        res.end("data: [DONE]\n\n");
+        return;
+      }
       if (typeof reply === "object" && "error" in reply) {
         res.writeHead(reply.error, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { message: "scripted model failure", type: "invalid_request_error" } }));
@@ -85,7 +112,7 @@ export async function startFakeModel(script: ScriptedReply | ScriptedReply[] = S
   return {
     baseUrl: `http://127.0.0.1:${port}/v1`,
     requests,
-    close: () => new Promise((r) => server.close(() => r())),
+    close: () => new Promise((r) => { server.close(() => r()); server.closeAllConnections(); }),
   };
 }
 
@@ -193,7 +220,7 @@ export async function grpcClient(port: number, opts: { failFast?: boolean } = {}
     supportedInterfaces: [{ url: `127.0.0.1:${port}`, protocolBinding: "GRPC", tenant: "", protocolVersion: "1.0" }],
     provider: undefined,
     version: "0",
-    capabilities: { extensions: [] },
+    capabilities: { streaming: true, extensions: [] },
     securitySchemes: {},
     securityRequirements: [],
     defaultInputModes: ["text/plain"],
@@ -289,4 +316,57 @@ export async function sendOverGrpc(
     : result.parts;
   const reply = parts.map((p) => (p.content?.$case === "text" ? p.content.value : "")).join("");
   return { reply, kind: "status" in result ? "task" : "message", contextId: result.contextId };
+}
+
+export const EVENT_KEY = "build-coding-agent/event";
+
+export type StreamedEvent = { kind: string; state?: number; taskId?: string; contextId?: string; event?: { type: string; [k: string]: unknown }; text?: string };
+
+/** Opens SendStreamingMessage and hands each event to `onEvent` as it arrives; resolves with all of them. */
+export async function streamMessage(
+  port: number,
+  text: string,
+  opts: { contextId?: string; onEvent?: (e: StreamedEvent) => void | Promise<void> } = {},
+): Promise<StreamedEvent[]> {
+  const client = await grpcClient(port);
+  const seen: StreamedEvent[] = [];
+  const textOf = (parts: any[] = []) => parts.map((p) => (p.content?.$case === "text" ? p.content.value : "")).join("");
+  const stream = client.sendMessageStream({
+    tenant: "",
+    message: {
+      messageId: crypto.randomUUID(),
+      contextId: opts.contextId ?? "",
+      taskId: "",
+      role: Role.ROLE_USER,
+      parts: [{ content: { $case: "text", value: text }, metadata: undefined, filename: "", mediaType: "" }],
+      metadata: undefined,
+      extensions: [],
+      referenceTaskIds: [],
+    },
+    configuration: undefined,
+    metadata: undefined,
+  });
+  for await (const raw of stream as AsyncIterable<any>) {
+    const p = raw.payload ?? raw;
+    const v = p.value ?? p;
+    const kind = p.$case ?? "unknown";
+    const message = v.status?.message;
+    const e: StreamedEvent = {
+      kind,
+      state: v.status?.state === undefined ? undefined : Number(v.status.state),
+      taskId: v.taskId ?? v.id,
+      contextId: v.contextId,
+      event: message?.metadata?.[EVENT_KEY],
+      text: kind === "artifactUpdate" ? textOf(v.artifact?.parts) : textOf(message?.parts),
+    };
+    seen.push(e);
+    await opts.onEvent?.(e);
+  }
+  return seen;
+}
+
+export async function cancelTask(port: number, taskId: string): Promise<number> {
+  const client = await grpcClient(port);
+  const task: any = await client.cancelTask({ tenant: "", id: taskId, metadata: undefined });
+  return Number(task.status?.state);
 }

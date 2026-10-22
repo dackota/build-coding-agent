@@ -19,7 +19,7 @@ function buildCard(grpcAddr: string, cardJson?: string): AgentCard {
     supportedInterfaces: [{ url: grpcAddr, protocolBinding: "GRPC", tenant: "", protocolVersion: "1.0" }],
     provider: undefined,
     version: "0.1.0",
-    capabilities: { streaming: false, extensions: [] },
+    capabilities: { streaming: true, extensions: [] },
     securitySchemes: {},
     securityRequirements: [],
     defaultInputModes: ["text/plain"],

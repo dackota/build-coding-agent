@@ -20,10 +20,12 @@ import { type AskUserPause, loadSession, saveSession, type SessionState, type To
 import { openMcpTools } from "./mcp-tools.ts";
 import { type ApprovalGate, createShellTool, SHELL_TOOL } from "./shell-tool.ts";
 import { createTaskTool } from "./subagents.ts";
+import { EVENT_KEY, type StreamEvent } from "./stream-events.ts";
 import { ChangeTracker } from "./workspace-diff.ts";
 
 const ASK_USER = ASK_USER_TOOL;
 const LOG_FIELD_MAX_CHARS = 200;
+const TEXT_FLUSH_MS = 150;
 
 /** The lifecycle hooks of one session's sandbox: each writes a log line the actor's log carries. */
 function hooksFor(contextId: string): SandboxHooks {
@@ -148,6 +150,8 @@ export function createExecutor(
 ): AgentExecutor & { shutdown(): Promise<void> } {
   const model = gatewayModel(config.baseUrl, config.model);
   const sandboxes = new Map<string, Promise<Sandbox>>();
+  /** The running turn of each task, so CancelTask can stop it. */
+  const running = new Map<string, { abort: AbortController; contextId: string }>();
 
   function sandboxFor(contextId: string): Promise<Sandbox> {
     let sandbox = sandboxes.get(contextId);
@@ -167,13 +171,21 @@ export function createExecutor(
         ? { ...ctx.task, status: status(TaskState.TASK_STATE_WORKING) }
         : { id: taskId, contextId, status: status(TaskState.TASK_STATE_WORKING), artifacts: [], history: [ctx.userMessage], metadata: undefined };
       bus.publish(AgentEvent.task(working));
+      const abort = new AbortController();
+      running.set(taskId, { abort, contextId });
       try {
-        await run(ctx, bus);
+        await run(ctx, bus, abort.signal);
       } catch (err) {
-        log("turn-failed", { message: (err as Error).message });
-        publishStatus(bus, taskId, contextId, TaskState.TASK_STATE_FAILED, agentText(contextId, taskId, `failed: ${(err as Error).message}`));
+        // A cancelled turn already published its canceled status.
+        if (abort.signal.aborted) log("turn-canceled", { taskId, message: (err as Error).message });
+        else {
+          log("turn-failed", { message: (err as Error).message });
+          publishStatus(bus, taskId, contextId, TaskState.TASK_STATE_FAILED, agentText(contextId, taskId, `failed: ${(err as Error).message}`));
+        }
+      } finally {
+        running.delete(taskId);
       }
-      bus.finished();
+      if (!abort.signal.aborted) bus.finished();
     },
 
     /** Stops every sandbox this executor started, so each runs its beforeStop hook. */
@@ -183,9 +195,12 @@ export function createExecutor(
       await stopAll(started);
     },
 
+    /** Stops the running turn; the steps that finished stay in the session, so the next message continues it. */
     async cancelTask(taskId: string, bus: ExecutionEventBus): Promise<void> {
+      const turn = running.get(taskId);
+      turn?.abort.abort();
+      if (turn) publishStatus(bus, taskId, turn.contextId, TaskState.TASK_STATE_CANCELED);
       bus.finished();
-      void taskId;
     },
   };
 
@@ -197,7 +212,7 @@ export function createExecutor(
     return prompt;
   }
 
-  async function run(ctx: RequestContext, bus: ExecutionEventBus): Promise<void> {
+  async function run(ctx: RequestContext, bus: ExecutionEventBus, signal: AbortSignal): Promise<void> {
     const { taskId, contextId } = ctx;
     // Everything the session knows comes from disk: a wake is a cold start.
     const loaded = loadSession(dataDir, contextId);
@@ -207,7 +222,8 @@ export function createExecutor(
     if (!turn) return;
     const base: SessionState = turn.approvedKinds.length > 0 ? { ...loaded, approvedKinds: turn.approvedKinds } : loaded;
     const todos: TodoHolder = { list: loaded.todos };
-    const result = await generateTurn(ctx, sandbox, turn, base, todos);
+    const result = await generateTurn(ctx, bus, signal, sandbox, turn, base, todos);
+    if (signal.aborted) throw new Error("canceled");
     const session: SessionState = { ...base, todos: todos.list };
     const ids = { taskId, contextId };
     if (pauseOnApproval(bus, ids, session, turn, result)) return;
@@ -217,12 +233,12 @@ export function createExecutor(
   }
 
   /** Runs the turn with this turn's MCP clients open, and closes them after. */
-  async function generateTurn(ctx: RequestContext, sandbox: Sandbox, turn: Turn, session: SessionState, todos: TodoHolder): Promise<TurnResult> {
+  async function generateTurn(ctx: RequestContext, bus: ExecutionEventBus, signal: AbortSignal, sandbox: Sandbox, turn: Turn, session: SessionState, todos: TodoHolder): Promise<TurnResult> {
     const skills = await discoverSkills(sandbox);
     const gate = turnGate(turn.approvedCalls, turn.approvedKinds);
     const mcp = await openMcpTools(mcpBindings, gate);
     try {
-      return await runAgent(ctx, sandbox, turn, session, todos, skills, gate, mcp.tools);
+      return await runAgent(ctx, bus, signal, sandbox, turn, session, todos, skills, gate, mcp.tools);
     } finally {
       await mcp.close();
     }
@@ -230,6 +246,8 @@ export function createExecutor(
 
   async function runAgent(
     ctx: RequestContext,
+    bus: ExecutionEventBus,
+    signal: AbortSignal,
     sandbox: Sandbox,
     turn: Turn,
     session: SessionState,
@@ -255,7 +273,8 @@ export function createExecutor(
     const instructions = await turnInstructions(sandbox, taskId, tools, workspaceDir(dataDir, contextId), skills, todos.list);
     const agent = new ToolLoopAgent({ model, instructions, tools, stopWhen: stepCountIs(opts.maxSteps) });
     let stepNumber = 0;
-    return agent.generate({
+    const stream = await agent.stream({
+      abortSignal: signal,
       // Old tool results are pruned for the model only; the saved session keeps them.
       messages: pruneMessages(turn.messages),
       // Save after every step, so a crash mid-turn keeps the steps that finished. A step that
@@ -267,6 +286,8 @@ export function createExecutor(
         saveSession(dataDir, contextId, { ...session, todos: todos.list, messages: [...turn.messages, ...step.response.messages] });
       },
     });
+    await publishStream(bus, { taskId, contextId }, signal, stream.fullStream);
+    return finishedTurn(stream);
   }
 
   /**
@@ -380,6 +401,55 @@ function publishArtifact(bus: ExecutionEventBus, taskId: string, contextId: stri
       metadata: undefined,
     }),
   );
+}
+
+/** The parts of a stream result that end a turn, once the stream is read. */
+async function finishedTurn(stream: {
+  content: PromiseLike<TurnResult["content"]>;
+  toolCalls: PromiseLike<TurnResult["toolCalls"]>;
+  response: PromiseLike<TurnResult["response"]>;
+  text: PromiseLike<string>;
+  finishReason: PromiseLike<string>;
+  steps: PromiseLike<TurnResult["steps"]>;
+}): Promise<TurnResult> {
+  return {
+    content: await stream.content,
+    toolCalls: await stream.toolCalls,
+    response: await stream.response,
+    text: await stream.text,
+    finishReason: await stream.finishReason,
+    steps: await stream.steps,
+  };
+}
+
+/**
+ * Sends tool calls and text out as they happen; the finished turn is read from the stream after.
+ * Every progress event is a task save at the controller, so text deltas are batched.
+ */
+async function publishStream(bus: ExecutionEventBus, ids: TurnIds, signal: AbortSignal, parts: AsyncIterable<{ type: string; [k: string]: any }>): Promise<void> {
+  let pendingText = "";
+  let lastFlush = 0;
+  const flushText = () => {
+    if (pendingText && !signal.aborted) publishProgress(bus, ids.taskId, ids.contextId, { type: "text_delta", text: pendingText });
+    pendingText = "";
+    lastFlush = Date.now();
+  };
+  for await (const part of parts) {
+    if (part.type === "text-delta") {
+      pendingText += part.text;
+      if (Date.now() - lastFlush >= TEXT_FLUSH_MS) flushText();
+    } else if (part.type === "tool-call") {
+      flushText();
+      publishProgress(bus, ids.taskId, ids.contextId, { type: "tool_call", name: part.toolName, args: part.input });
+    } else if (part.type === "error") throw part.error;
+  }
+  flushText();
+}
+
+function publishProgress(bus: ExecutionEventBus, taskId: string, contextId: string, event: StreamEvent): void {
+  const text = event.type === "text_delta" ? event.text : "";
+  const message: Message = { ...agentText(contextId, taskId, text), metadata: { [EVENT_KEY]: event } };
+  publishStatus(bus, taskId, contextId, TaskState.TASK_STATE_WORKING, message);
 }
 
 function agentText(contextId: string, taskId: string, text: string): Message {
