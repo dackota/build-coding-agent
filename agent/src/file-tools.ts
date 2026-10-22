@@ -18,7 +18,19 @@ function countOf(haystack: string, needle: string): number {
 export function createFileTools(sandbox: Sandbox, changes: ChangeTracker) {
   return {
     read_file: tool({
-      description: "Read a file in the workspace. Use it before editing a file, to see its exact current text.",
+      description: `Read one file in the workspace. Returns its full text.
+
+WHEN TO USE: before editing a file, to see its exact current text; reading a file the user names or attached.
+
+WHEN NOT TO USE: finding which file holds some text (use search); listing a directory (use bash with ls).
+
+DO NOT USE FOR: paths outside the workspace: absolute paths and '..' are refused.
+
+USAGE: path is relative to the workspace root. A very large file is cut, with a note that it was truncated.
+
+EXAMPLES:
+  - Read the entry point: path "src/index.ts"
+  - Read the manifest: path "package.json"`,
       inputSchema: z.object({ path: PATH }),
       execute: async ({ path }) => {
         // The executor caps every tool's output (context.ts), so a large file is cut there.
@@ -27,7 +39,19 @@ export function createFileTools(sandbox: Sandbox, changes: ChangeTracker) {
     }),
 
     write_file: tool({
-      description: "Create a file, or replace a whole file, in the workspace. To change part of an existing file, use edit_file instead.",
+      description: `Create a file, or replace a whole file, in the workspace. Returns how many characters were written.
+
+WHEN TO USE: creating a new file; rewriting a small file from scratch.
+
+WHEN NOT TO USE: changing part of an existing file (use edit_file: it keeps the rest exactly).
+
+DO NOT USE FOR: paths outside the workspace, or deleting files.
+
+USAGE: path is relative to the workspace root; parent directories are created. content is the whole new file.
+
+EXAMPLES:
+  - New script: path "src/hello.js", content "console.log('hi');\\n"
+  - New config: path ".prettierrc", content "{}\\n"`,
       inputSchema: z.object({ path: PATH, content: z.string().describe("The full new content of the file") }),
       execute: async ({ path, content }) => {
         await changes.recordBefore(sandbox, path);
@@ -37,8 +61,19 @@ export function createFileTools(sandbox: Sandbox, changes: ChangeTracker) {
     }),
 
     edit_file: tool({
-      description:
-        "Replace exact text in a workspace file. old_string must match the file exactly (whitespace included) and, unless replace_all is true, appear exactly once: include enough surrounding text to make it unique.",
+      description: `Replace exact text in a workspace file. Returns how many occurrences were replaced.
+
+WHEN TO USE: renaming, fixing, or adding a few lines in an existing file.
+
+WHEN NOT TO USE: creating a file or rewriting all of it (use write_file); finding the text first (use read_file or search).
+
+DO NOT USE FOR: paths outside the workspace; text you have not read: copy old_string from read_file output.
+
+USAGE: old_string must match the file exactly (whitespace included) and, unless replace_all is true, appear exactly once: include enough surrounding text to make it unique.
+
+EXAMPLES:
+  - Rename a function: old_string "function foo()", new_string "function bar()"
+  - Rename every call: old_string "foo(", new_string "bar(", replace_all true`,
       inputSchema: z.object({
         path: PATH,
         old_string: z.string().min(1).describe("The exact text to replace"),
@@ -57,7 +92,19 @@ export function createFileTools(sandbox: Sandbox, changes: ChangeTracker) {
     }),
 
     search: tool({
-      description: "Search the workspace files for a literal string. Returns path:line:text for each match. Use it to find where something is defined or used.",
+      description: `Search the workspace files for a literal string. Returns path:line:text for each match.
+
+WHEN TO USE: finding where something is defined or used; finding which file to read or edit.
+
+WHEN NOT TO USE: reading a file you already know (use read_file); listing files (use bash with ls).
+
+DO NOT USE FOR: regular expressions: the pattern is matched as plain text.
+
+USAGE: path narrows the search to a file or directory; left out, the whole workspace. At most ${MAX_SEARCH_LINES} matches are shown.
+
+EXAMPLES:
+  - Find a function: pattern "function foo("
+  - Find uses in one folder: pattern "foo(", path "src"`,
       inputSchema: z.object({
         pattern: z.string().min(1).describe("The literal text to find (not a regular expression)"),
         path: PATH.optional().describe("A directory or file to search in; the whole workspace when left out"),

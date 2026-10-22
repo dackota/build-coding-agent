@@ -3,14 +3,18 @@
 // Attach files with --file <path> (repeatable); the agent replies with its text and a unified diff.
 // A pause prints the question and a `paused:` line with the ids; answer it with
 //   pnpm --dir agent run cli -- --task <id> --context <id> --request <id> "<answer>" ["<answer 2>" ...]
-// (one answer per question, in order). A reply prints `context=<id>` on stderr; continue the
-// session with `--context <id> "<message>"`. Every call sends the kagent HITL extension header.
+// (one answer per question, in order). A tool approval pause prints the command and a
+// `paused: ... approval=<id>` line; decide it with
+//   pnpm --dir agent run cli -- --task <id> --context <id> --approval <id> --approve | --approve-session | --deny "<reason>"
+// A reply prints `context=<id>` on stderr; continue the session with `--context <id> "<message>"`.
+// Every call sends the kagent HITL extension header.
 // Without KAGENT_URL it opens a kubectl port-forward to the controller on kind-build-coding-agent.
 import { type ChildProcess, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { sendTurn, type Turn } from "./a2a-client.ts";
+import type { ApprovalDecision } from "./hitl.ts";
 
 const CONTEXT = "kind-build-coding-agent";
 const CONTROLLER_A2A_PORT = 8083;
@@ -65,44 +69,60 @@ async function sendWithRetry(send: () => Promise<Turn>): Promise<Turn> {
 
 const FLAGS = ["--task", "--context", "--request"] as const;
 const FILE_FLAG = "--file";
+const APPROVAL_FLAG = "--approval";
+const DENY_FLAG = "--deny";
+const DECISION_FLAGS = ["--approve", "--approve-session", DENY_FLAG] as const;
 
 type Args = {
   text: string;
   files: string[];
   contextId?: string;
   reply?: { taskId: string; contextId: string; requestId: string; answers: string[][] };
+  approval?: { taskId: string; contextId: string; ids: string[]; decision: ApprovalDecision };
 };
+
+function fail(message: string): never {
+  console.error(message);
+  process.exit(2);
+}
+
+/** --task T --context C --approval ID[,ID] with one of --approve, --approve-session, --deny "<reason>". */
+function approvalArgs(flags: Map<string, string>, decisions: { flag: string; reason: string }[]): Args {
+  if (decisions.length !== 1) fail(`a tool approval needs exactly one of ${DECISION_FLAGS.join(", ")}`);
+  const ids = (flags.get(APPROVAL_FLAG) ?? "").split(",").filter(Boolean);
+  if (!flags.get("--task") || !flags.get("--context") || ids.length === 0) fail(`a tool approval needs --task, --context, and ${APPROVAL_FLAG}`);
+  const { flag, reason } = decisions[0]!;
+  if (flag === DENY_FLAG && !reason) fail(`${DENY_FLAG} needs a reason`);
+  const decision: ApprovalDecision = flag === DENY_FLAG ? { type: "deny", reason } : flag === "--approve-session" ? { type: "approve_session" } : { type: "approve" };
+  const text = decision.type === "deny" ? `deny: ${reason}` : decision.type === "approve_session" ? "approve for this session" : "approve";
+  return { text, files: [], approval: { taskId: flags.get("--task")!, contextId: flags.get("--context")!, ids, decision } };
+}
 
 function parseArgs(argv: string[]): Args {
   const args = argv.filter((a) => a !== "--");
   const flags = new Map<string, string>();
   const files: string[] = [];
+  const decisions: { flag: string; reason: string }[] = [];
   const rest: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const flag = FLAGS.find((f) => f === args[i]);
-    if (flag) flags.set(flag, args[++i] ?? "");
+    if (flag || args[i] === APPROVAL_FLAG) flags.set(args[i]!, args[++i] ?? "");
     else if (args[i] === FILE_FLAG) files.push(args[++i] ?? "");
+    else if (args[i] === DENY_FLAG) decisions.push({ flag: DENY_FLAG, reason: args[++i] ?? "" });
+    else if (DECISION_FLAGS.some((f) => f === args[i])) decisions.push({ flag: args[i]!, reason: "" });
     else rest.push(args[i]!);
   }
-  if (files.some((f) => f === "")) {
-    console.error(`${FILE_FLAG} needs a path`);
-    process.exit(2);
-  }
+  if (files.some((f) => f === "")) fail(`${FILE_FLAG} needs a path`);
+  if (flags.has(APPROVAL_FLAG) || decisions.length > 0) return approvalArgs(flags, decisions);
   if (flags.size === 0) return { text: rest.join(" ").trim(), files };
   // --context alone continues the session with a new message.
   if (flags.size === 1 && flags.has("--context")) {
     const contextId = flags.get("--context")!;
-    if (!contextId) {
-      console.error("--context needs a context id");
-      process.exit(2);
-    }
+    if (!contextId) fail("--context needs a context id");
     return { text: rest.join(" ").trim(), files, contextId };
   }
   const missing = FLAGS.filter((f) => !flags.get(f));
-  if (missing.length > 0 || rest.length === 0) {
-    console.error(`answering a pause needs ${FLAGS.join(", ")} and at least one answer`);
-    process.exit(2);
-  }
+  if (missing.length > 0 || rest.length === 0) fail(`answering a pause needs ${FLAGS.join(", ")} and at least one answer`);
   return {
     text: rest.join("; "),
     files,
@@ -112,6 +132,12 @@ function parseArgs(argv: string[]): Args {
 
 function printTurn(turn: Turn): void {
   if (turn.state === "failed") throw new Error(`the agent failed: ${turn.text}`);
+  if (turn.approval) {
+    console.log(`tool_approval_request: ${turn.approval.hint}`);
+    for (const t of turn.approval.tools) console.log(`tool: ${t.name} ${JSON.stringify(t.args)}`);
+    console.log(`paused: task=${turn.taskId} context=${turn.contextId} approval=${turn.approval.tools.map((t) => t.id).join(",")}`);
+    return;
+  }
   if (!turn.pause) {
     if (!turn.text) throw new Error("the agent sent an empty reply");
     console.log(turn.text);
@@ -141,7 +167,7 @@ function readAttachments(paths: string[]): { name: string; content: Buffer }[] {
   });
 }
 
-const { text, files: filePaths, contextId, reply } = parseArgs(process.argv.slice(2));
+const { text, files: filePaths, contextId, reply, approval } = parseArgs(process.argv.slice(2));
 if (!text) {
   console.error('usage: pnpm --dir agent run cli -- [--file <path>]... "<message>"');
   process.exit(2);
@@ -158,7 +184,7 @@ const agent = process.env.AGENT ?? "hello-agent";
 const forward = process.env.KAGENT_URL ? undefined : await openForward(namespace);
 try {
   const baseUrl = process.env.KAGENT_URL || forward!.baseUrl;
-  printTurn(await sendWithRetry(() => sendTurn({ baseUrl, namespace, agent, text, files, contextId, reply })));
+  printTurn(await sendWithRetry(() => sendTurn({ baseUrl, namespace, agent, text, files, contextId, reply, approval })));
 } catch (err) {
   console.error((err as Error).message);
   process.exitCode = 1;

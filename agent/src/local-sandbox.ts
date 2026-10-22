@@ -3,7 +3,7 @@ import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 import { type ExecResult, OutsideWorkspaceError, relativeInWorkspace, type Sandbox } from "./sandbox.ts";
 
-const EXEC_TIMEOUT_MS = 60_000;
+export const EXEC_TIMEOUT_MS = 60_000;
 const EXEC_MAX_BUFFER = 1024 * 1024;
 
 const isInside = (root: string, path: string) => path === root || path.startsWith(root + sep);

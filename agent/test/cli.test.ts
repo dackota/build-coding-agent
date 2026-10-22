@@ -176,3 +176,73 @@ it("prints each artifact on its own line: the reply, then the diff", async () =>
 
   expect(got.text).toBe("Renamed.\n--- a/x\n+++ b/x\n");
 });
+
+const APPROVAL_PAUSED = {
+  jsonrpc: "2.0",
+  id: 1,
+  result: {
+    task: {
+      id: "task-5",
+      contextId: "ctx-5",
+      status: {
+        state: "TASK_STATE_INPUT_REQUIRED",
+        message: {
+          role: "ROLE_AGENT",
+          parts: [{ text: 'Run "rm -rf build" in the workspace? (bash)' }],
+          extensions: [HITL_URI],
+          metadata: {
+            [HITL_URI]: {
+              type: "tool_approval_request",
+              hint: 'Run "rm -rf build" in the workspace? (bash)',
+              tools: [{ id: "appr-1", call_id: "call-1", name: "bash", args: { command: "rm -rf build" } }],
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+it("reads a tool approval pause: the tools, ids and hint", async () => {
+  const stub = await stubController(APPROVAL_PAUSED);
+  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "clean" });
+  stub.close();
+
+  expect(got.state).toBe("input-required");
+  expect(got.pause).toBeUndefined();
+  expect(got.approval).toEqual({
+    hint: 'Run "rm -rf build" in the workspace? (bash)',
+    tools: [{ id: "appr-1", name: "bash", args: { command: "rm -rf build" } }],
+  });
+});
+
+it("answers a tool approval pause with each decision of the union", async () => {
+  const stub = await stubController({ jsonrpc: "2.0", id: 1, result: { task: { id: "task-5", contextId: "ctx-5", status: { state: "TASK_STATE_COMPLETED" }, artifacts: [] } } });
+  const decisions = [
+    { type: "approve" as const },
+    { type: "deny" as const, reason: "keep build" },
+    { type: "approve_session" as const },
+  ];
+  for (const decision of decisions) {
+    await sendTurn({
+      baseUrl: stub.baseUrl,
+      namespace: "kagent",
+      agent: "a",
+      text: decision.type,
+      approval: { taskId: "task-5", contextId: "ctx-5", ids: ["appr-1"], decision },
+    });
+  }
+  stub.close();
+
+  const sent = stub.seen.map((s) => s.body.params.message);
+  for (const m of sent) {
+    expect(m.taskId).toBe("task-5");
+    expect(m.contextId).toBe("ctx-5");
+    expect(m.extensions).toEqual([HITL_URI]);
+  }
+  expect(sent.map((m) => m.metadata[HITL_URI])).toEqual([
+    { type: "tool_approval_response", approvals: [{ id: "appr-1", approved: true }] },
+    { type: "tool_approval_response", approvals: [{ id: "appr-1", approved: false, rejection_reason: "keep build" }] },
+    { type: "tool_approval_response", approvals: [{ id: "appr-1", approved: true, scope: "session" }] },
+  ]);
+});

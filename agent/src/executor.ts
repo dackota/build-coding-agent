@@ -8,13 +8,15 @@ import { z } from "zod";
 import type { AgentConfig } from "./config.ts";
 import { capTools, pruneMessages } from "./context.ts";
 import { createFileTools } from "./file-tools.ts";
-import { askUserMessage, parseAskUserResponse, type Question } from "./hitl.ts";
+import { approvalHint, pendingTools, resumeApproval, turnGate } from "./approval.ts";
+import { askUserMessage, parseAskUserResponse, parseToolApprovalResponse, type Question, toolApprovalMessage } from "./hitl.ts";
 import { createLocalSandbox } from "./local-sandbox.ts";
 import { log } from "./log.ts";
 import { createSkillTool, discoverSkills, type Skill } from "./skills.ts";
 import { readIfExists, type Sandbox } from "./sandbox.ts";
 import { AGENTS_MD_FILE, buildSystemPrompt } from "./system-prompt.ts";
-import { loadSession, type PendingPause, saveSession, workspaceDir } from "./session-state.ts";
+import { type AskUserPause, loadSession, saveSession, type SessionState, type ToolApprovalPause, workspaceDir } from "./session-state.ts";
+import { createShellTool, SHELL_TOOL } from "./shell-tool.ts";
 import { ChangeTracker } from "./workspace-diff.ts";
 
 const ASK_USER = "ask_user";
@@ -37,8 +39,19 @@ const textPart = (value: string, mediaType = "text/plain") => ({
 });
 
 const askUserTool = tool({
-  description:
-    "Ask the user a structured question when the task is unclear, instead of guessing. Offer choices when the answer is one of a few options.",
+  description: `Ask the user one or more structured questions and wait for the answers. Returns one answer list per question, in order.
+
+WHEN TO USE: the task is unclear or has several reasonable readings; a choice only the user can make (a name, a colour, which file).
+
+WHEN NOT TO USE: facts you can find in the workspace (use read_file or search); asking permission to run a command (the shell tool asks on its own).
+
+DO NOT USE FOR: confirming work you can check yourself, or chatting.
+
+USAGE: offer choices when the answer is one of a few options; leave choices empty for a free-text answer; set multiple when more than one choice may be picked.
+
+EXAMPLES:
+  - Which colour should the button be? choices ["red", "blue"]
+  - What should the new module be called? choices []`,
   inputSchema: z.object({
     questions: z
       .array(
@@ -67,12 +80,39 @@ function readMessage(message: Message): { text: string; files: Attachment[] } {
 
 const status = (state: TaskState, message?: Message) => ({ state, message, timestamp: new Date().toISOString() });
 
+/** What a turn runs with: the conversation so far, the diff tracker, and what the user approved. */
+type Turn = {
+  messages: ModelMessage[];
+  changes: ChangeTracker;
+  /** Tool calls the user approved once, by call id. */
+  approvedCalls: ReadonlySet<string>;
+  /** Risk kinds approved for the rest of the session, with any this answer adds. */
+  approvedKinds: string[];
+};
+
+/** The parts of a generate result that end a turn. */
+type TurnResult = {
+  content: readonly { type: string }[];
+  toolCalls: readonly ({ toolName: string; toolCallId: string; input: unknown } | undefined)[];
+  response: { messages: ModelMessage[] };
+  text: string;
+  finishReason: string;
+  steps: readonly unknown[];
+};
+
+type TurnIds = { taskId: string; contextId: string };
+
+/** A step that pauses: it calls ask_user, or holds a call for approval. Its calls have no result yet. */
+const isPausingStep = (step: Pick<TurnResult, "content" | "toolCalls">): boolean =>
+  step.toolCalls.some((c) => c?.toolName === ASK_USER) || step.content.some((p) => p.type === "tool-approval-request");
+
 /**
- * Runs each message through a tool loop (file tools on the context's Sandbox, and ask_user)
- * with the model behind the gateway, and replies as an A2A Task: the model's text, and a
- * unified diff of what the turn changed. A turn ends at the step limit. When the model calls
- * ask_user, the task pauses in INPUT_REQUIRED (kagent HITL extension) and the pending pause
- * is saved under the data dir, so a cold start can finish it.
+ * Runs each message through a tool loop (file tools and the shell on the context's Sandbox,
+ * and ask_user) with the model behind the gateway, and replies as an A2A Task: the model's
+ * text, and a unified diff of what the turn changed. A turn ends at the step limit. When the
+ * model calls ask_user, or a shell command the safety gate holds, the task pauses in
+ * INPUT_REQUIRED (kagent HITL extension: ask_user_request or tool_approval_request) and the
+ * pending pause is saved in the session state, so a cold start can finish it.
  */
 export function createExecutor(config: AgentConfig, dataDir: string, opts: ExecutorOptions): AgentExecutor {
   const model = createOpenAICompatible({ name: "gateway", baseURL: config.baseUrl }).chatModel(config.model);
@@ -121,55 +161,40 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
   async function run(ctx: RequestContext, bus: ExecutionEventBus): Promise<void> {
     const { taskId, contextId } = ctx;
     // Everything the session knows comes from disk: a wake is a cold start.
-    const session = loadSession(dataDir, contextId);
-    const history = session.messages as ModelMessage[];
-    const { pending } = session;
-    log("turn", { taskId, contextId, pending: pending ? pending.taskId : "", answered: parseAskUserResponse(ctx.userMessage) ? "yes" : "no" });
+    const loaded = loadSession(dataDir, contextId);
+    log("turn", { taskId, contextId, pending: loaded.pending ? loaded.pending.taskId : "", answered: parseAskUserResponse(ctx.userMessage) ? "yes" : "no" });
     const sandbox = await sandboxFor(contextId);
-    let messages: ModelMessage[];
-    let changes: ChangeTracker;
-    if (pending && pending.taskId === taskId) {
-      const answer = parseAskUserResponse(ctx.userMessage);
-      if (!answer || answer.id !== pending.requestId) {
-        // Not an answer to the pending question: stay paused on it.
-        publishPause(bus, taskId, contextId, pending.requestId, pending.questions);
-        return;
-      }
-      changes = new ChangeTracker(pending.baseline);
-      messages = [
-        ...(pending.messages as ModelMessage[]),
-        {
-          role: "tool",
-          content: [{ type: "tool-result", toolCallId: pending.toolCallId, toolName: ASK_USER, output: { type: "json", value: { answers: answer.answers } } }],
-        },
-      ];
-    } else {
-      changes = new ChangeTracker();
-      const { text, files } = readMessage(ctx.userMessage);
-      // Attached files are the turn's starting point: written before the baseline, so not in the diff.
-      for (const f of files) await sandbox.writeFile(f.path, f.content);
-      const listing = files.length > 0 ? `\n\nFiles in the workspace: ${files.map((f) => f.path).join(", ")}` : "";
-      messages = [...history, { role: "user", content: `${text}${listing}` }];
-    }
+    const turn = await startTurn(ctx, bus, loaded, sandbox);
+    if (!turn) return;
+    const session: SessionState = turn.approvedKinds.length > 0 ? { ...loaded, approvedKinds: turn.approvedKinds } : loaded;
+    const result = await generateTurn(ctx, sandbox, turn, session);
+    const ids = { taskId, contextId };
+    if (pauseOnApproval(bus, ids, session, turn, result)) return;
+    if (pauseOnAskUser(bus, ids, session, turn, result)) return;
+    saveSession(dataDir, contextId, { ...session, messages: [...turn.messages, ...result.response.messages], pending: undefined });
+    await publishReply(bus, ids, sandbox, turn.changes, result);
+  }
 
+  async function generateTurn(ctx: RequestContext, sandbox: Sandbox, turn: Turn, session: SessionState): Promise<TurnResult> {
+    const { taskId, contextId } = ctx;
     const skills = await discoverSkills(sandbox);
     const tools = capTools(
-      { ...createFileTools(sandbox, changes), [ASK_USER]: askUserTool, ...(skills.length > 0 ? { load_skill: createSkillTool(skills, taskId) } : {}) },
+      {
+        ...createFileTools(sandbox, turn.changes),
+        [SHELL_TOOL]: createShellTool(sandbox, turnGate(turn.approvedCalls, turn.approvedKinds)),
+        [ASK_USER]: askUserTool,
+        ...(skills.length > 0 ? { load_skill: createSkillTool(skills, taskId) } : {}),
+      },
       opts.maxToolOutputChars,
     );
     const instructions = await turnInstructions(sandbox, taskId, tools, workspaceDir(dataDir, contextId), skills);
-    const agent = new ToolLoopAgent({
-      model,
-      instructions,
-      tools,
-      stopWhen: stepCountIs(opts.maxSteps),
-    });
+    const agent = new ToolLoopAgent({ model, instructions, tools, stopWhen: stepCountIs(opts.maxSteps) });
     let stepNumber = 0;
-    const result = await agent.generate({
+    return agent.generate({
       // Old tool results are pruned for the model only; the saved session keeps them.
-      messages: pruneMessages(messages),
+      messages: pruneMessages(turn.messages),
       // Save after every step, so a crash mid-turn keeps the steps that finished. A step that
-      // calls ask_user is saved as the pause below instead: its call has no result yet.
+      // pauses is saved as the pause instead.
       onStepFinish: (step) => {
         stepNumber++;
         log("step-usage", {
@@ -179,29 +204,54 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
           outputTokens: step.usage.outputTokens ?? 0,
           cachedTokens: step.usage.inputTokenDetails?.cacheReadTokens ?? 0,
         });
-        if (step.toolCalls.some((c) => c?.toolName === ASK_USER)) return;
-        saveSession(dataDir, contextId, { ...session, messages: [...messages, ...step.response.messages] });
+        if (isPausingStep(step)) return;
+        saveSession(dataDir, contextId, { ...session, messages: [...turn.messages, ...step.response.messages] });
       },
     });
+  }
 
+  /**
+   * Pauses on the calls the safety gate holds, if any: saves the pause and publishes a
+   * tool_approval_request. The paused turn lives in the pause; the conversation stays as it was.
+   */
+  function pauseOnApproval(bus: ExecutionEventBus, ids: TurnIds, session: SessionState, turn: Turn, result: TurnResult): boolean {
+    const held = pendingTools(result.content);
+    if (held.length === 0) return false;
+    const paused: ToolApprovalPause = {
+      kind: "tool_approval",
+      taskId: ids.taskId,
+      hint: approvalHint(held),
+      tools: held,
+      messages: [...turn.messages, ...result.response.messages],
+      baseline: turn.changes.baseline(),
+    };
+    saveSession(dataDir, ids.contextId, { ...session, pending: paused });
+    log("approval-pause", { taskId: ids.taskId, tools: held.map((t) => `${t.name}:${t.kinds.join(",")}`).join(" ") });
+    publishApprovalPause(bus, ids.taskId, ids.contextId, paused);
+    return true;
+  }
+
+  /** Pauses on an ask_user call, if the turn made one: saves the pause and publishes an ask_user_request. */
+  function pauseOnAskUser(bus: ExecutionEventBus, ids: TurnIds, session: SessionState, turn: Turn, result: TurnResult): boolean {
     const call = result.toolCalls.find((c) => c?.toolName === ASK_USER);
-    if (call) {
-      const questions = (call.input as { questions: Question[] }).questions;
-      const paused: PendingPause = {
-        requestId: randomUUID(),
-        taskId,
-        toolCallId: call.toolCallId,
-        questions,
-        messages: [...messages, ...result.response.messages],
-        baseline: changes.baseline(),
-      };
-      // The paused turn lives in the pause until it is answered; the conversation stays as it was.
-      saveSession(dataDir, contextId, { ...session, messages: history, pending: paused });
-      publishPause(bus, taskId, contextId, paused.requestId, questions);
-      return;
-    }
+    if (!call) return false;
+    const questions = (call.input as { questions: Question[] }).questions;
+    const paused: AskUserPause = {
+      requestId: randomUUID(),
+      taskId: ids.taskId,
+      toolCallId: call.toolCallId,
+      questions,
+      messages: [...turn.messages, ...result.response.messages],
+      baseline: turn.changes.baseline(),
+    };
+    saveSession(dataDir, ids.contextId, { ...session, pending: paused });
+    publishPause(bus, ids.taskId, ids.contextId, paused.requestId, questions);
+    return true;
+  }
 
-    saveSession(dataDir, contextId, { messages: [...messages, ...result.response.messages], todos: session.todos });
+  /** The finished turn's reply and diff, then the completed status. */
+  async function publishReply(bus: ExecutionEventBus, ids: TurnIds, sandbox: Sandbox, changes: ChangeTracker, result: TurnResult): Promise<void> {
+    const { taskId, contextId } = ids;
     const isAtStepLimit = result.finishReason === "tool-calls" && result.steps.length >= opts.maxSteps;
     if (isAtStepLimit) log("step-limit", { taskId, steps: result.steps.length });
     const reply = isAtStepLimit
@@ -212,6 +262,51 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
     if (diff) publishArtifact(bus, taskId, contextId, "diff", textPart(diff, "text/x-diff"));
     publishStatus(bus, taskId, contextId, TaskState.TASK_STATE_COMPLETED);
   }
+}
+
+/** The turn to run: a resumed pause, or the new message after the history. Undefined when the task stays paused. */
+async function startTurn(ctx: RequestContext, bus: ExecutionEventBus, session: SessionState, sandbox: Sandbox): Promise<Turn | undefined> {
+  const approvedKinds = session.approvedKinds ?? [];
+  const pending = session.pending?.taskId === ctx.taskId ? session.pending : undefined;
+  if (pending?.kind === "tool_approval") return resumeToolApproval(ctx, bus, pending, approvedKinds);
+  if (pending) return resumeAskUser(ctx, bus, pending, approvedKinds);
+  const { text, files } = readMessage(ctx.userMessage);
+  // Attached files are the turn's starting point: written before the baseline, so not in the diff.
+  for (const f of files) await sandbox.writeFile(f.path, f.content);
+  const listing = files.length > 0 ? `\n\nFiles in the workspace: ${files.map((f) => f.path).join(", ")}` : "";
+  const messages: ModelMessage[] = [...(session.messages as ModelMessage[]), { role: "user", content: `${text}${listing}` }];
+  return { messages, changes: new ChangeTracker(), approvedCalls: new Set(), approvedKinds };
+}
+
+/** Resumes a tool approval pause, or keeps the task paused when the answer does not decide each pending call. */
+function resumeToolApproval(ctx: RequestContext, bus: ExecutionEventBus, pending: ToolApprovalPause, approvedKinds: string[]): Turn | undefined {
+  const { taskId, contextId } = ctx;
+  const resumed = resumeApproval(pending, parseToolApprovalResponse(ctx.userMessage));
+  if (!resumed) {
+    publishApprovalPause(bus, taskId, contextId, pending);
+    return undefined;
+  }
+  log("approval", { taskId, approved: resumed.approvedCalls.size, of: pending.tools.length, session: resumed.sessionKinds.join(",") });
+  return {
+    messages: resumed.messages,
+    changes: new ChangeTracker(pending.baseline),
+    approvedCalls: resumed.approvedCalls,
+    approvedKinds: [...new Set([...approvedKinds, ...resumed.sessionKinds])].sort(),
+  };
+}
+
+/** Resumes an ask_user pause with the answers, or keeps the task paused when the message does not answer it. */
+function resumeAskUser(ctx: RequestContext, bus: ExecutionEventBus, pending: AskUserPause, approvedKinds: string[]): Turn | undefined {
+  const answer = parseAskUserResponse(ctx.userMessage);
+  if (!answer || answer.id !== pending.requestId) {
+    publishPause(bus, ctx.taskId, ctx.contextId, pending.requestId, pending.questions);
+    return undefined;
+  }
+  const answers: ModelMessage = {
+    role: "tool",
+    content: [{ type: "tool-result", toolCallId: pending.toolCallId, toolName: ASK_USER, output: { type: "json", value: { answers: answer.answers } } }],
+  };
+  return { messages: [...(pending.messages as ModelMessage[]), answers], changes: new ChangeTracker(pending.baseline), approvedCalls: new Set(), approvedKinds };
 }
 
 function publishArtifact(bus: ExecutionEventBus, taskId: string, contextId: string, name: string, part: ReturnType<typeof textPart>): void {
@@ -233,6 +328,11 @@ function agentText(contextId: string, taskId: string, text: string): Message {
 
 function publishStatus(bus: ExecutionEventBus, taskId: string, contextId: string, state: TaskState, message?: Message): void {
   bus.publish(AgentEvent.statusUpdate({ taskId, contextId, status: status(state, message), metadata: undefined }));
+}
+
+function publishApprovalPause(bus: ExecutionEventBus, taskId: string, contextId: string, pause: ToolApprovalPause): void {
+  const tools = pause.tools.map(({ id, call_id, name, args }) => ({ id, call_id, name, args }));
+  publishStatus(bus, taskId, contextId, TaskState.TASK_STATE_INPUT_REQUIRED, toolApprovalMessage({ contextId, taskId, hint: pause.hint, tools }));
 }
 
 function publishPause(bus: ExecutionEventBus, taskId: string, contextId: string, requestId: string, questions: Question[]): void {

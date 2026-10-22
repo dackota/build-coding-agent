@@ -1,4 +1,4 @@
-import { HITL_EXTENSION_URI, type Question } from "./hitl.ts";
+import { type ApprovalDecision, HITL_EXTENSION_URI, type Question } from "./hitl.ts";
 
 export type SendOptions = {
   baseUrl: string;
@@ -12,7 +12,11 @@ export type SendOptions = {
   contextId?: string;
   /** Answers the pause of an earlier turn: same task and context, with an ask_user_response. */
   reply?: { taskId: string; contextId: string; requestId: string; answers: string[][] };
+  /** Decides a tool approval pause: the same decision for each pending tool id. */
+  approval?: { taskId: string; contextId: string; ids: string[]; decision: ApprovalDecision };
 };
+
+export type ApprovalTool = { id: string; name: string; args: Record<string, unknown> };
 
 export type Turn = {
   /** "completed", "input-required", "failed", ... or "message" when the agent replied without a task. */
@@ -21,7 +25,15 @@ export type Turn = {
   contextId: string;
   text: string;
   pause?: { requestId: string; questions: Question[] };
+  /** A tool approval pause: the tool calls waiting for a decision. */
+  approval?: { hint: string; tools: ApprovalTool[] };
 };
+
+/** kagent's ToolApproval for one decision; "approve for this session" adds scope "session". */
+function wireApproval(id: string, decision: ApprovalDecision): Record<string, unknown> {
+  if (decision.type === "deny") return { id, approved: false, rejection_reason: decision.reason };
+  return decision.type === "approve_session" ? { id, approved: true, scope: "session" } : { id, approved: true };
+}
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 const USER_ID = "cli@build-coding-agent";
@@ -51,6 +63,13 @@ export async function sendTurn(opts: SendOptions): Promise<Turn> {
     message.extensions = [HITL_EXTENSION_URI];
     message.metadata = {
       [HITL_EXTENSION_URI]: { type: "ask_user_response", id: opts.reply.requestId, answers: opts.reply.answers.map((answer) => ({ answer })) },
+    };
+  } else if (opts.approval) {
+    message.taskId = opts.approval.taskId;
+    message.contextId = opts.approval.contextId;
+    message.extensions = [HITL_EXTENSION_URI];
+    message.metadata = {
+      [HITL_EXTENSION_URI]: { type: "tool_approval_response", approvals: opts.approval.ids.map((id) => wireApproval(id, opts.approval!.decision)) },
     };
   }
   const res = await fetch(`${opts.baseUrl}/agents/${opts.namespace}/${opts.agent}`, {
@@ -83,9 +102,14 @@ export async function sendTurn(opts: SendOptions): Promise<Turn> {
     contextId: task.contextId ?? "",
     text: artifactText || textOf(statusMessage?.parts),
   };
-  const payload = statusMessage?.metadata?.[HITL_EXTENSION_URI] as { type?: string; id?: string; questions?: Question[] } | undefined;
+  const payload = statusMessage?.metadata?.[HITL_EXTENSION_URI] as
+    | { type?: string; id?: string; questions?: Question[]; hint?: string; tools?: ApprovalTool[] }
+    | undefined;
   if (state === "input-required" && payload?.type === "ask_user_request" && payload.id) {
     turn.pause = { requestId: payload.id, questions: payload.questions ?? [] };
+  }
+  if (state === "input-required" && payload?.type === "tool_approval_request" && Array.isArray(payload.tools)) {
+    turn.approval = { hint: payload.hint ?? "", tools: payload.tools.map(({ id, name, args }) => ({ id, name, args: args ?? {} })) };
   }
   return turn;
 }

@@ -1,31 +1,48 @@
 // Session state on disk: one JSON file, <data dir>/sessions/<contextId>/state.json, holding the
-// conversation, the pending pause, and the todos. A wake is a cold start, so every turn loads
-// it and every step saves it. Each save goes to a temp file, is fsynced, then renamed over
-// the old file, so a crash or a snapshot never captures half a file.
+// conversation, the pending pause, the todos, and the risk kinds approved for the session. A
+// wake is a cold start, so every turn loads it and every step saves it. Each save goes to a temp
+// file, is fsynced, then renamed over the old file, so a crash or a snapshot never captures half
+// a file.
 import * as fs from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { log } from "./log.ts";
 
-export type PendingPause = {
-  requestId: string;
+type PauseBase = {
   taskId: string;
-  toolCallId: string;
-  questions: { question: string; choices: string[]; multiple: boolean }[];
-  /** The model conversation up to and including the ask_user call. */
+  /** The model conversation up to and including the call that paused. */
   messages: unknown[];
   /** Each file's content before the turn's first write, so the diff after the answer covers the whole turn. */
   baseline?: Record<string, string | null>;
 };
+
+/** A pause on ask_user. Saved before tool approvals existed, so it may have no `kind`. */
+export type AskUserPause = PauseBase & {
+  kind?: "ask_user";
+  requestId: string;
+  toolCallId: string;
+  questions: { question: string; choices: string[]; multiple: boolean }[];
+};
+
+/** A pause on tool calls the safety gate holds. Each tool's id is the AI SDK approval id. */
+export type ToolApprovalPause = PauseBase & {
+  kind: "tool_approval";
+  hint: string;
+  tools: { id: string; call_id: string; name: string; args: Record<string, unknown>; kinds: string[] }[];
+};
+
+export type PendingPause = AskUserPause | ToolApprovalPause;
 
 export type Todo = { content: string; status: "pending" | "in_progress" | "completed" };
 
 export type SessionState = {
   /** The model conversation of every finished step, in order. */
   messages: unknown[];
-  /** The ask_user question the session is paused on, if any. */
+  /** The ask_user question or tool approval the session is paused on, if any. */
   pending?: PendingPause;
   todos: Todo[];
+  /** The risk kinds ("rm", "redirect") the user approved for the rest of this session. */
+  approvedKinds?: string[];
 };
 
 /** The fs calls an atomic write makes; a test swaps them to crash part-way. */
@@ -35,19 +52,34 @@ const STATE_FILE = "state.json";
 const TEMP_PREFIX = `${STATE_FILE}.tmp-`;
 const CONTEXT_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
-const pendingSchema = z.object({
-  requestId: z.string(),
+const pauseBase = {
   taskId: z.string(),
-  toolCallId: z.string(),
-  questions: z.array(z.object({ question: z.string(), choices: z.array(z.string()), multiple: z.boolean() })),
   messages: z.array(z.unknown()),
   baseline: z.record(z.string(), z.string().nullable()).optional(),
+};
+
+const askUserSchema = z.object({
+  ...pauseBase,
+  kind: z.literal("ask_user").optional(),
+  requestId: z.string(),
+  toolCallId: z.string(),
+  questions: z.array(z.object({ question: z.string(), choices: z.array(z.string()), multiple: z.boolean() })),
+});
+
+const toolApprovalSchema = z.object({
+  ...pauseBase,
+  kind: z.literal("tool_approval"),
+  hint: z.string(),
+  tools: z.array(
+    z.object({ id: z.string(), call_id: z.string(), name: z.string(), args: z.record(z.string(), z.unknown()), kinds: z.array(z.string()) }),
+  ),
 });
 
 const stateSchema = z.object({
   messages: z.array(z.unknown()),
-  pending: pendingSchema.optional(),
+  pending: z.union([toolApprovalSchema, askUserSchema]).optional(),
   todos: z.array(z.object({ content: z.string(), status: z.enum(["pending", "in_progress", "completed"]) })),
+  approvedKinds: z.array(z.string()).optional(),
 });
 
 /** <data dir>/<kind>/<contextId>, after checking the context id cannot climb out. */
@@ -83,6 +115,10 @@ function removeStaleTemps(dir: string): void {
   }
 }
 
+/** What the log names a pause by: the ask_user request id, or "tool_approval". */
+const pauseLabel = (pending: PendingPause | undefined): string =>
+  pending === undefined ? "" : pending.kind === "tool_approval" ? "tool_approval" : pending.requestId;
+
 export function saveSession(dataDir: string, contextId: string, state: SessionState, io: AtomicIo = fs): void {
   const dir = sessionDir(dataDir, contextId);
   fs.mkdirSync(dir, { recursive: true });
@@ -93,7 +129,7 @@ export function saveSession(dataDir: string, contextId: string, state: SessionSt
     contextId,
     messages: state.messages.length,
     todos: state.todos.length,
-    pending: state.pending?.requestId ?? "",
+    pending: pauseLabel(state.pending),
     files: fs.readdirSync(dir).sort().join(","),
   });
 }
