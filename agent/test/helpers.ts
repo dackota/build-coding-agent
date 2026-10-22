@@ -126,6 +126,8 @@ export async function startAgent(configPath: string, extraEnv: Record<string, st
       KAGENT_CONFIG_PATH: configPath,
       KAGENT_GRPC_ADDR: `127.0.0.1:${grpcPort}`,
       KAGENT_READYZ_PORT: String(readyzPort),
+      // Each turn opens a workspace under the data dir; /data does not exist on a dev machine.
+      AGENT_DATA_DIR: mkdtempSync(join(tmpdir(), "agent-data-")),
       ...extraEnv,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -192,6 +194,66 @@ export async function grpcClient(port: number, opts: { failFast?: boolean } = {}
     skills: [],
     signatures: [],
   });
+}
+
+export type TaskReply = {
+  state: number;
+  contextId: string;
+  /** Artifact text by artifact name ("reply", "diff"). */
+  artifacts: Record<string, string>;
+  /** The status message text (a failure says why). */
+  statusText: string;
+};
+
+/** One SendMessage with a task text and files attached as raw parts named by their workspace path. */
+export async function sendTask(port: number, text: string, files: Record<string, string> = {}, contextId = ""): Promise<TaskReply> {
+  const client = await grpcClient(port);
+  const fileParts = Object.entries(files).map(([filename, content]) => ({
+    content: { $case: "raw" as const, value: Buffer.from(content, "utf8") },
+    metadata: undefined,
+    filename,
+    mediaType: "text/plain",
+  }));
+  const result: any = await client.sendMessage({
+    tenant: "",
+    message: {
+      messageId: crypto.randomUUID(),
+      contextId,
+      taskId: "",
+      role: Role.ROLE_USER,
+      parts: [...fileParts, { content: { $case: "text", value: text }, metadata: undefined, filename: "", mediaType: "" }],
+      metadata: undefined,
+      extensions: [],
+      referenceTaskIds: [],
+    },
+    configuration: undefined,
+    metadata: undefined,
+  });
+  const textOf = (parts: any[] = []) => parts.map((p) => (p.content?.$case === "text" ? p.content.value : "")).join("");
+  const artifacts: Record<string, string> = {};
+  for (const a of result.artifacts ?? []) artifacts[a.name] = textOf(a.parts);
+  return { state: Number(result.status?.state), contextId: result.contextId, artifacts, statusText: textOf(result.status?.message?.parts) };
+}
+
+/** Retries sendTask until the agent answers (it may still be starting). */
+export async function sendTaskWhenUp(port: number, text: string, files: Record<string, string> = {}, contextId = ""): Promise<TaskReply> {
+  const got = await waitFor(async () => {
+    try {
+      return await sendTask(port, text, files, contextId);
+    } catch {
+      return null;
+    }
+  });
+  if (!got) throw new Error("no reply from the agent");
+  return got;
+}
+
+/** The tool results the agent sent back to the model, in order, across all model requests. */
+export function toolResults(model: FakeModel): string[] {
+  const last = model.requests.at(-1);
+  if (!last) return [];
+  const body = JSON.parse(last.body) as { messages: { role: string; content: string }[] };
+  return body.messages.filter((m) => m.role === "tool").map((m) => m.content);
 }
 
 export async function sendOverGrpc(

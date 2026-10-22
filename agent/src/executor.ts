@@ -3,20 +3,32 @@ import { Role, TaskState } from "@a2a-js/sdk";
 import type { Message, Task } from "@a2a-js/sdk";
 import { AgentEvent, type AgentExecutor, type ExecutionEventBus, type RequestContext } from "@a2a-js/sdk/server";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { generateText, type ModelMessage, tool } from "ai";
+import { type ModelMessage, stepCountIs, tool, ToolLoopAgent } from "ai";
 import { z } from "zod";
 import type { AgentConfig } from "./config.ts";
+import { createFileTools } from "./file-tools.ts";
 import { askUserMessage, parseAskUserResponse, type Question } from "./hitl.ts";
+import { createLocalSandbox } from "./local-sandbox.ts";
 import { log } from "./log.ts";
-import { clearPending, loadPending, type PendingPause, savePending } from "./session-state.ts";
+import type { Sandbox } from "./sandbox.ts";
+import { clearPending, loadPending, type PendingPause, savePending, workspaceDir } from "./session-state.ts";
+import { ChangeTracker } from "./workspace-diff.ts";
 
 const ASK_USER = "ask_user";
 
-const textPart = (value: string) => ({
+export type SandboxKind = "local" | "memory";
+export type ExecutorOptions = {
+  /** The most model steps (calls) in one turn. */
+  maxSteps: number;
+  /** "local": the workspace directory itself. "memory": just-bash copy-on-write over it, for tests. */
+  sandbox: SandboxKind;
+};
+
+const textPart = (value: string, mediaType = "text/plain") => ({
   content: { $case: "text" as const, value },
   metadata: undefined,
   filename: "",
-  mediaType: "text/plain",
+  mediaType,
 });
 
 const askUserTool = tool({
@@ -35,19 +47,41 @@ const askUserTool = tool({
   }),
 });
 
-function userText(message: Message): string {
-  return message.parts.flatMap((p) => (p.content?.$case === "text" ? [p.content.value] : [])).join("\n");
+type Attachment = { path: string; content: string };
+
+/** The message's text, and the files it carries (raw parts with a file name). */
+function readMessage(message: Message): { text: string; files: Attachment[] } {
+  const texts: string[] = [];
+  const files: Attachment[] = [];
+  for (const p of message.parts) {
+    if (p.content?.$case === "text") texts.push(p.content.value);
+    else if (p.content?.$case === "raw" && p.filename) files.push({ path: p.filename, content: Buffer.from(p.content.value).toString("utf8") });
+  }
+  return { text: texts.join("\n"), files };
 }
 
 const status = (state: TaskState, message?: Message) => ({ state, message, timestamp: new Date().toISOString() });
 
 /**
- * Answers each message with a model call through the gateway and replies as an A2A Task.
- * When the model calls ask_user, the task pauses in INPUT_REQUIRED (kagent HITL extension)
- * and the pending pause is saved under the data dir, so a cold start can finish it.
+ * Runs each message through a tool loop (file tools on the context's Sandbox, and ask_user)
+ * with the model behind the gateway, and replies as an A2A Task: the model's text, and a
+ * unified diff of what the turn changed. A turn ends at the step limit. When the model calls
+ * ask_user, the task pauses in INPUT_REQUIRED (kagent HITL extension) and the pending pause
+ * is saved under the data dir, so a cold start can finish it.
  */
-export function createExecutor(config: AgentConfig, dataDir: string): AgentExecutor {
+export function createExecutor(config: AgentConfig, dataDir: string, opts: ExecutorOptions): AgentExecutor {
   const model = createOpenAICompatible({ name: "gateway", baseURL: config.baseUrl }).chatModel(config.model);
+  const sandboxes = new Map<string, Promise<Sandbox>>();
+
+  function sandboxFor(contextId: string): Promise<Sandbox> {
+    let sandbox = sandboxes.get(contextId);
+    if (!sandbox) {
+      const root = workspaceDir(dataDir, contextId);
+      sandbox = opts.sandbox === "memory" ? import("./memory-sandbox.ts").then((m) => m.createMemorySandbox(root)) : createLocalSandbox(root);
+      sandboxes.set(contextId, sandbox);
+    }
+    return sandbox;
+  }
 
   return {
     async execute(ctx: RequestContext, bus: ExecutionEventBus): Promise<void> {
@@ -75,7 +109,9 @@ export function createExecutor(config: AgentConfig, dataDir: string): AgentExecu
     const { taskId, contextId } = ctx;
     const pending = loadPending(dataDir, contextId);
     log("turn", { taskId, contextId, pending: pending ? pending.taskId : "", answered: parseAskUserResponse(ctx.userMessage) ? "yes" : "no" });
+    const sandbox = await sandboxFor(contextId);
     let messages: ModelMessage[];
+    let changes: ChangeTracker;
     if (pending && pending.taskId === taskId) {
       const answer = parseAskUserResponse(ctx.userMessage);
       if (!answer || answer.id !== pending.requestId) {
@@ -83,6 +119,7 @@ export function createExecutor(config: AgentConfig, dataDir: string): AgentExecu
         publishPause(bus, taskId, contextId, pending.requestId, pending.questions);
         return;
       }
+      changes = new ChangeTracker(pending.baseline);
       messages = [
         ...(pending.messages as ModelMessage[]),
         {
@@ -91,10 +128,21 @@ export function createExecutor(config: AgentConfig, dataDir: string): AgentExecu
         },
       ];
     } else {
-      messages = [{ role: "user", content: userText(ctx.userMessage) }];
+      changes = new ChangeTracker();
+      const { text, files } = readMessage(ctx.userMessage);
+      // Attached files are the turn's starting point: written before the baseline, so not in the diff.
+      for (const f of files) await sandbox.writeFile(f.path, f.content);
+      const listing = files.length > 0 ? `\n\nFiles in the workspace: ${files.map((f) => f.path).join(", ")}` : "";
+      messages = [{ role: "user", content: `${text}${listing}` }];
     }
 
-    const result = await generateText({ model, system: config.instruction || undefined, messages, tools: { [ASK_USER]: askUserTool } });
+    const agent = new ToolLoopAgent({
+      model,
+      instructions: config.instruction || undefined,
+      tools: { ...createFileTools(sandbox, changes), [ASK_USER]: askUserTool },
+      stopWhen: stepCountIs(opts.maxSteps),
+    });
+    const result = await agent.generate({ messages });
 
     const call = result.toolCalls.find((c) => c.toolName === ASK_USER);
     if (call) {
@@ -105,6 +153,7 @@ export function createExecutor(config: AgentConfig, dataDir: string): AgentExecu
         toolCallId: call.toolCallId,
         questions,
         messages: [...messages, ...result.response.messages],
+        baseline: changes.baseline(),
       };
       savePending(dataDir, contextId, paused);
       publishPause(bus, taskId, contextId, paused.requestId, questions);
@@ -112,18 +161,29 @@ export function createExecutor(config: AgentConfig, dataDir: string): AgentExecu
     }
 
     clearPending(dataDir, contextId);
-    bus.publish(
-      AgentEvent.artifactUpdate({
-        taskId,
-        contextId,
-        artifact: { artifactId: randomUUID(), name: "reply", description: "", parts: [textPart(result.text)], metadata: undefined, extensions: [] },
-        append: false,
-        lastChunk: true,
-        metadata: undefined,
-      }),
-    );
+    const isAtStepLimit = result.finishReason === "tool-calls" && result.steps.length >= opts.maxSteps;
+    if (isAtStepLimit) log("step-limit", { taskId, steps: result.steps.length });
+    const reply = isAtStepLimit
+      ? `Stopped: the step limit (${opts.maxSteps} steps) was reached before the task was done. The diff shows the changes so far.`
+      : result.text;
+    publishArtifact(bus, taskId, contextId, "reply", textPart(reply));
+    const diff = await changes.diff(sandbox);
+    if (diff) publishArtifact(bus, taskId, contextId, "diff", textPart(diff, "text/x-diff"));
     publishStatus(bus, taskId, contextId, TaskState.TASK_STATE_COMPLETED);
   }
+}
+
+function publishArtifact(bus: ExecutionEventBus, taskId: string, contextId: string, name: string, part: ReturnType<typeof textPart>): void {
+  bus.publish(
+    AgentEvent.artifactUpdate({
+      taskId,
+      contextId,
+      artifact: { artifactId: randomUUID(), name, description: "", parts: [part], metadata: undefined, extensions: [] },
+      append: false,
+      lastChunk: true,
+      metadata: undefined,
+    }),
+  );
 }
 
 function agentText(contextId: string, taskId: string, text: string): Message {

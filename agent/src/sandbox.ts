@@ -1,0 +1,43 @@
+// The swap point between the file tools and where the code lives. The local Sandbox works on
+// a directory under the data dir (inside the agent's own actor); the in-memory one is for tests.
+import { posix } from "node:path";
+
+export type ExecResult = { stdout: string; stderr: string; exitCode: number };
+
+export interface Sandbox {
+  /** Reads a file by its workspace-relative path. */
+  readFile(path: string): Promise<string>;
+  /** Writes a file by its workspace-relative path, creating parent directories. */
+  writeFile(path: string, content: string): Promise<void>;
+  /** Runs a shell command with the workspace as its working directory. */
+  exec(command: string): Promise<ExecResult>;
+  stop(): Promise<void>;
+}
+
+export class OutsideWorkspaceError extends Error {
+  constructor(path: string) {
+    super(`path ${JSON.stringify(path)} is outside the workspace: use a path relative to the workspace root, with no "..", and no symlink out`);
+    this.name = "OutsideWorkspaceError";
+  }
+}
+
+const MAX_PATH_LENGTH = 4096;
+
+/**
+ * The workspace-relative, normalized form of `path`, or an OutsideWorkspaceError. Absolute
+ * paths, any ".." that climbs out, NUL bytes, and backslashes are refused. Symlinks are each
+ * implementation's job: only it can see the real files.
+ */
+export function relativeInWorkspace(path: string): string {
+  if (typeof path !== "string" || path === "" || path.length > MAX_PATH_LENGTH) throw new OutsideWorkspaceError(String(path));
+  if (path.includes("\0") || path.includes("\\") || posix.isAbsolute(path)) throw new OutsideWorkspaceError(path);
+  const normalized = posix.normalize(path);
+  if (normalized === ".." || normalized.startsWith("../")) throw new OutsideWorkspaceError(path);
+  if (normalized === "." || normalized === "./") throw new OutsideWorkspaceError(path);
+  return normalized.replace(/\/+$/, "");
+}
+
+/** Single-quotes a value for a POSIX shell. */
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}

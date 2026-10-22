@@ -19,10 +19,13 @@
     "@bufbuild/protobuf": "^2.16.0",
     "@grpc/grpc-js": "^1.14.6",
     "ai": "^6",
+    "diff": "^9",
     "zod": "^3"
   },
   "devDependencies": {
     "@types/node": "^24",
+    "fast-check": "^4.10.2",
+    "just-bash": "3.6.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
   }

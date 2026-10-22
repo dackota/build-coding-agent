@@ -1,11 +1,14 @@
 // Minimal CLI: send one message through the kagent controller and print the reply.
 // Usage: pnpm --dir agent run cli -- "<message>"   (env: AGENT, AGENT_NAMESPACE, KAGENT_URL)
+// Attach files with --file <path> (repeatable); the agent replies with its text and a unified diff.
 // A pause prints the question and a `paused:` line with the ids; answer it with
 //   pnpm --dir agent run cli -- --task <id> --context <id> --request <id> "<answer>" ["<answer 2>" ...]
 // (one answer per question, in order). Every call sends the kagent HITL extension header.
 // Without KAGENT_URL it opens a kubectl port-forward to the controller on kind-build-coding-agent.
 import { type ChildProcess, spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { sendTurn, type Turn } from "./a2a-client.ts";
 
 const CONTEXT = "kind-build-coding-agent";
@@ -60,17 +63,26 @@ async function sendWithRetry(send: () => Promise<Turn>): Promise<Turn> {
 }
 
 const FLAGS = ["--task", "--context", "--request"] as const;
+const FILE_FLAG = "--file";
 
-function parseArgs(argv: string[]): { text: string; reply?: { taskId: string; contextId: string; requestId: string; answers: string[][] } } {
+type Args = { text: string; files: string[]; reply?: { taskId: string; contextId: string; requestId: string; answers: string[][] } };
+
+function parseArgs(argv: string[]): Args {
   const args = argv.filter((a) => a !== "--");
   const flags = new Map<string, string>();
+  const files: string[] = [];
   const rest: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const flag = FLAGS.find((f) => f === args[i]);
     if (flag) flags.set(flag, args[++i] ?? "");
+    else if (args[i] === FILE_FLAG) files.push(args[++i] ?? "");
     else rest.push(args[i]!);
   }
-  if (flags.size === 0) return { text: rest.join(" ").trim() };
+  if (files.some((f) => f === "")) {
+    console.error(`${FILE_FLAG} needs a path`);
+    process.exit(2);
+  }
+  if (flags.size === 0) return { text: rest.join(" ").trim(), files };
   const missing = FLAGS.filter((f) => !flags.get(f));
   if (missing.length > 0 || rest.length === 0) {
     console.error(`answering a pause needs ${FLAGS.join(", ")} and at least one answer`);
@@ -78,6 +90,7 @@ function parseArgs(argv: string[]): { text: string; reply?: { taskId: string; co
   }
   return {
     text: rest.join("; "),
+    files,
     reply: { taskId: flags.get("--task")!, contextId: flags.get("--context")!, requestId: flags.get("--request")!, answers: rest.map((a) => [a]) },
   };
 }
@@ -96,9 +109,31 @@ function printTurn(turn: Turn): void {
   console.log(`paused: task=${turn.taskId} context=${turn.contextId} request=${turn.pause.requestId}`);
 }
 
-const { text, reply } = parseArgs(process.argv.slice(2));
+/**
+ * Reads each attached file. A relative path inside the directory the user ran from keeps its
+ * path as the workspace name (src/a.ts); anything else is sent by its base name.
+ * pnpm --dir runs this in agent/, so relative paths resolve against INIT_CWD, where pnpm was run.
+ */
+function readAttachments(paths: string[]): { name: string; content: Buffer }[] {
+  const from = process.env.INIT_CWD ?? process.cwd();
+  return paths.map((p) => {
+    const full = resolve(from, p);
+    const rel = relative(from, full);
+    const name = rel === "" || rel.startsWith("..") || isAbsolute(rel) ? basename(full) : rel.split(sep).join("/");
+    return { name, content: readFileSync(full) };
+  });
+}
+
+const { text, files: filePaths, reply } = parseArgs(process.argv.slice(2));
 if (!text) {
-  console.error('usage: pnpm --dir agent run cli -- "<message>"');
+  console.error('usage: pnpm --dir agent run cli -- [--file <path>]... "<message>"');
+  process.exit(2);
+}
+let files: { name: string; content: Buffer }[];
+try {
+  files = readAttachments(filePaths);
+} catch (err) {
+  console.error(`cannot read an attached file: ${(err as Error).message}`);
   process.exit(2);
 }
 const namespace = process.env.AGENT_NAMESPACE ?? "kagent";
@@ -106,7 +141,7 @@ const agent = process.env.AGENT ?? "hello-agent";
 const forward = process.env.KAGENT_URL ? undefined : await openForward(namespace);
 try {
   const baseUrl = process.env.KAGENT_URL || forward!.baseUrl;
-  printTurn(await sendWithRetry(() => sendTurn({ baseUrl, namespace, agent, text, reply })));
+  printTurn(await sendWithRetry(() => sendTurn({ baseUrl, namespace, agent, text, files, reply })));
 } catch (err) {
   console.error((err as Error).message);
   process.exitCode = 1;

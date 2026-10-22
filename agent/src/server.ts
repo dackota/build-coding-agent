@@ -6,7 +6,7 @@ import { A2AService, grpcService, UserBuilder } from "@a2a-js/sdk/server/grpc";
 import type { EarlyListener } from "./early-listener.ts";
 import { describeConfig, loadConfigFromEnv, loadRuntimeFromEnv } from "./config.ts";
 import { ControllerTaskStore, DEFAULT_IDENTITY_PATH } from "./controller-task-store.ts";
-import { createExecutor } from "./executor.ts";
+import { createExecutor, type ExecutorOptions } from "./executor.ts";
 import { log } from "./log.ts";
 
 export type ServerOptions = { env: NodeJS.ProcessEnv; grpcAddr: string; listener: EarlyListener; cardJson?: string };
@@ -30,6 +30,17 @@ function buildCard(grpcAddr: string, cardJson?: string): AgentCard {
   return { ...fallback, ...(JSON.parse(cardJson) as Partial<AgentCard>) };
 }
 
+const DEFAULT_MAX_STEPS = 25;
+
+/** AGENT_MAX_STEPS (a positive integer, default 25) and AGENT_SANDBOX ("local", the default, or "memory" for tests). */
+export function executorOptions(env: NodeJS.ProcessEnv): ExecutorOptions {
+  const maxSteps = env.AGENT_MAX_STEPS === undefined ? DEFAULT_MAX_STEPS : Number(env.AGENT_MAX_STEPS);
+  if (!Number.isInteger(maxSteps) || maxSteps < 1) throw new Error(`AGENT_MAX_STEPS must be a positive integer, got ${JSON.stringify(env.AGENT_MAX_STEPS)}`);
+  const sandbox = env.AGENT_SANDBOX ?? "local";
+  if (sandbox !== "local" && sandbox !== "memory") throw new Error(`AGENT_SANDBOX must be "local" or "memory", got ${JSON.stringify(sandbox)}`);
+  return { maxSteps, sandbox };
+}
+
 /** Load config, build the A2A request handler, and serve A2A over gRPC. */
 export async function startServer(opts: ServerOptions): Promise<grpc.Server> {
   const config = loadConfigFromEnv(opts.env);
@@ -42,7 +53,7 @@ export async function startServer(opts: ServerOptions): Promise<grpc.Server> {
   // Key names only, never values: shows what kagent put in the config (subagent definitions included).
   const described = describeConfig(opts.env.KAGENT_CONFIG_JSON ?? readFileSync(opts.env.KAGENT_CONFIG_PATH ?? "/config/config.json", "utf8"));
   log("config-received", { agentKeys: described.agentKeys.join(","), subAgents: JSON.stringify(described.subAgents) });
-  const handler = new DefaultRequestHandler(buildCard(opts.grpcAddr, opts.cardJson), tasks, createExecutor(config, dataDir));
+  const handler = new DefaultRequestHandler(buildCard(opts.grpcAddr, opts.cardJson), tasks, createExecutor(config, dataDir, executorOptions(opts.env)));
   const server = new grpc.Server();
   server.addService(A2AService, grpcService({ requestHandler: handler, userBuilder: UserBuilder.noAuthentication }));
   const injector = server.createConnectionInjector(grpc.ServerCredentials.createInsecure());

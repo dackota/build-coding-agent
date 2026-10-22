@@ -10,15 +10,23 @@ export type PendingPause = {
   questions: { question: string; choices: string[]; multiple: boolean }[];
   /** The model conversation up to and including the ask_user call. */
   messages: unknown[];
+  /** Each file's content before the turn's first write, so the diff after the answer covers the whole turn. */
+  baseline?: Record<string, string | null>;
 };
 
 const PENDING_FILE = "pending.json";
 const CONTEXT_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
-function sessionDir(dataDir: string, contextId: string): string {
+/** <data dir>/<kind>/<contextId>, after checking the context id cannot climb out. */
+function contextDir(dataDir: string, kind: "sessions" | "workspaces", contextId: string): string {
   if (!CONTEXT_ID.test(contextId)) throw new Error("invalid context id: it must be 1-128 letters, digits, '-' or '_'");
-  return join(dataDir, "sessions", contextId);
+  return join(dataDir, kind, contextId);
 }
+
+const sessionDir = (dataDir: string, contextId: string) => contextDir(dataDir, "sessions", contextId);
+
+/** The workspace for a context: <data dir>/workspaces/<contextId>/. */
+export const workspaceDir = (dataDir: string, contextId: string): string => contextDir(dataDir, "workspaces", contextId);
 
 export function savePending(dataDir: string, contextId: string, pause: PendingPause): void {
   const dir = sessionDir(dataDir, contextId);

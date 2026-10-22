@@ -6,6 +6,8 @@ export type SendOptions = {
   agent: string;
   text: string;
   timeoutMs?: number;
+  /** Files sent with the message, each as a raw part named by its workspace path. */
+  files?: { name: string; content: Buffer }[];
   /** Answers the pause of an earlier turn: same task and context, with an ask_user_response. */
   reply?: { taskId: string; contextId: string; requestId: string; answers: string[][] };
 };
@@ -35,7 +37,10 @@ export async function sendTurn(opts: SendOptions): Promise<Turn> {
   const message: Record<string, unknown> = {
     messageId: crypto.randomUUID(),
     role: "ROLE_USER",
-    parts: [{ text: opts.text }],
+    parts: [
+      ...(opts.files ?? []).map((f) => ({ raw: f.content.toString("base64"), filename: f.name, mediaType: "text/plain" })),
+      { text: opts.text },
+    ],
   };
   if (opts.reply) {
     message.taskId = opts.reply.taskId;
@@ -66,7 +71,8 @@ export async function sendTurn(opts: SendOptions): Promise<Turn> {
     return { state: "message", taskId: "", contextId: m?.contextId ?? "", text: textOf(m?.parts) };
   }
   const state = stateName(task.status?.state);
-  const artifactText = textOf((task.artifacts ?? []).flatMap((a) => a.parts ?? []));
+  // One line per artifact: the reply, then the diff when the turn changed files.
+  const artifactText = (task.artifacts ?? []).map((a) => textOf(a.parts)).join("\n");
   const statusMessage = task.status?.message;
   const turn: Turn = {
     state,

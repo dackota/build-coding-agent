@@ -133,3 +133,33 @@ it("answers a pause with an ask_user_response on the same task and context", asy
   expect(got.state).toBe("completed");
   expect(got.text).toBe("Done: blue.");
 });
+
+it("sends attached files as raw parts with their file names", async () => {
+  const stub = await stubController({ jsonrpc: "2.0", id: 1, result: { task: { id: "t", contextId: "c", status: { state: "TASK_STATE_COMPLETED" }, artifacts: [] } } });
+  await sendTurn({
+    baseUrl: stub.baseUrl,
+    namespace: "kagent",
+    agent: "a",
+    text: "rename foo to bar",
+    files: [{ name: "greet.js", content: Buffer.from("function foo() {}\n") }],
+  });
+  stub.close();
+
+  const parts = stub.seen[0]?.body.params.message.parts;
+  expect(parts).toEqual([
+    { raw: Buffer.from("function foo() {}\n").toString("base64"), filename: "greet.js", mediaType: "text/plain" },
+    { text: "rename foo to bar" },
+  ]);
+});
+
+it("prints each artifact on its own line: the reply, then the diff", async () => {
+  const stub = await stubController({
+    jsonrpc: "2.0",
+    id: 1,
+    result: { task: { id: "t", contextId: "c", status: { state: "TASK_STATE_COMPLETED" }, artifacts: [{ name: "reply", parts: [{ text: "Renamed." }] }, { name: "diff", parts: [{ text: "--- a/x\n+++ b/x\n" }] }] } },
+  });
+  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "go" });
+  stub.close();
+
+  expect(got.text).toBe("Renamed.\n--- a/x\n+++ b/x\n");
+});

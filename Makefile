@@ -27,5 +27,5 @@ preflight: ## Check tools, versions, and OPENCODE_KEY without creating anything
 deploy: ## Build the agent image, push it, apply the Harness and Agent by digest (image named by the registry's kind-network address)
 	platform/deploy.sh
 
-chat: ## Send one message to the deployed agent through the kagent controller: make chat MSG="hello"
-	pnpm --dir agent run cli -- "$(MSG)"
+chat: ## Send one message to the deployed agent through the kagent controller: make chat MSG="hello" [FILE=path/to/file]
+	pnpm --dir agent run cli -- $(if $(FILE),--file "$(FILE)") "$(MSG)"
