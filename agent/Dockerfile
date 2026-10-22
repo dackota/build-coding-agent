@@ -10,6 +10,9 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile --prod
 COPY src ./src
+# Session state (pending pauses) lives here; an actor snapshot keeps it across suspend and wake.
+RUN mkdir -p /data
+ENV AGENT_DATA_DIR=/data
 
 # Explicit entrypoint: kagent's byo contract is A2A over gRPC on 127.0.0.1:80 and /readyz on 8081.
 ENTRYPOINT ["node", "/app/src/main.ts"]

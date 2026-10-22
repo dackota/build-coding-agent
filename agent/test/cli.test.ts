@@ -1,7 +1,9 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { expect, it } from "vitest";
-import { sendMessage } from "../src/a2a-client.ts";
+import { sendMessage, sendTurn } from "../src/a2a-client.ts";
+
+const HITL_URI = "https://kagent.dev/extensions/hitl/v1";
 
 it("sends one SendMessage to the controller's agent endpoint and returns the reply text", async () => {
   let seen: { url?: string; headers: Record<string, unknown>; body: string } = { headers: {}, body: "" };
@@ -43,4 +45,91 @@ it("throws when the controller answers a JSON-RPC error", async () => {
     sendMessage({ baseUrl: `http://127.0.0.1:${port}`, namespace: "kagent", agent: "a", text: "x" }),
   ).rejects.toThrow(/agent down/);
   server.close();
+});
+
+const PAUSED = {
+  jsonrpc: "2.0",
+  id: 1,
+  result: {
+    task: {
+      id: "task-9",
+      contextId: "ctx-9",
+      status: {
+        state: "TASK_STATE_INPUT_REQUIRED",
+        message: {
+          role: "ROLE_AGENT",
+          parts: [{ text: "Which colour?" }],
+          extensions: [HITL_URI],
+          metadata: {
+            [HITL_URI]: { type: "ask_user_request", id: "req-1", questions: [{ question: "Which colour?", choices: ["red", "blue"], multiple: false }] },
+          },
+        },
+      },
+    },
+  },
+};
+
+async function stubController(reply: unknown) {
+  const seen: { headers: Record<string, unknown>; body: any }[] = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      seen.push({ headers: req.headers, body: JSON.parse(body) });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(reply));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as AddressInfo;
+  return { baseUrl: `http://127.0.0.1:${port}`, seen, close: () => server.close() };
+}
+
+it("sends the A2A-Extensions HITL header on every message", async () => {
+  const stub = await stubController(PAUSED);
+  await sendMessage({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "hi" }).catch(() => undefined);
+  await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "hi" });
+  await sendTurn({
+    baseUrl: stub.baseUrl,
+    namespace: "kagent",
+    agent: "a",
+    text: "blue",
+    reply: { taskId: "task-9", contextId: "ctx-9", requestId: "req-1", answers: [["blue"]] },
+  });
+  stub.close();
+
+  expect(stub.seen).toHaveLength(3);
+  for (const s of stub.seen) expect(s.headers["a2a-extensions"]).toBe(HITL_URI);
+});
+
+it("reads a pause from the controller's reply: state, ids, and the questions", async () => {
+  const stub = await stubController(PAUSED);
+  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "hi" });
+  stub.close();
+
+  expect(got.state).toBe("input-required");
+  expect(got.taskId).toBe("task-9");
+  expect(got.contextId).toBe("ctx-9");
+  expect(got.pause).toEqual({ requestId: "req-1", questions: [{ question: "Which colour?", choices: ["red", "blue"], multiple: false }] });
+  expect(got.text).toBe("Which colour?");
+});
+
+it("answers a pause with an ask_user_response on the same task and context", async () => {
+  const stub = await stubController({ jsonrpc: "2.0", id: 1, result: { task: { id: "task-9", contextId: "ctx-9", status: { state: "TASK_STATE_COMPLETED" }, artifacts: [{ parts: [{ text: "Done: blue." }] }] } } });
+  const got = await sendTurn({
+    baseUrl: stub.baseUrl,
+    namespace: "kagent",
+    agent: "a",
+    text: "blue",
+    reply: { taskId: "task-9", contextId: "ctx-9", requestId: "req-1", answers: [["blue"]] },
+  });
+  stub.close();
+
+  const message = stub.seen[0]?.body.params.message;
+  expect(message.taskId).toBe("task-9");
+  expect(message.contextId).toBe("ctx-9");
+  expect(message.extensions).toEqual([HITL_URI]);
+  expect(message.metadata[HITL_URI]).toEqual({ type: "ask_user_response", id: "req-1", answers: [{ answer: ["blue"] }] });
+  expect(got.state).toBe("completed");
+  expect(got.text).toBe("Done: blue.");
 });

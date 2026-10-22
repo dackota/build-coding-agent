@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { loadConfig, loadConfigFromEnv } from "../src/config.ts";
+import { describeConfig, loadConfig, loadConfigFromEnv, loadRuntimeFromEnv } from "../src/config.ts";
 
 function write(content: string): string {
   const path = join(mkdtempSync(join(tmpdir(), "cfg-")), "config.json");
@@ -41,4 +41,25 @@ it("never puts config values in an error, only key names", () => {
     expect((err as Error).message).not.toContain(secret);
     expect((err as Error).message).toContain("api_key");
   }
+});
+
+it("reports subagent names and config key names, never values", () => {
+  const secret = "sk-secret-value-123";
+  const json = JSON.stringify({
+    agent: {
+      model: { model: "m", openai: { base_url: "http://gw/v1", api_key: secret } },
+      instruction: "i",
+      sub_agents: [{ name: "explorer", instruction: secret, model: { model: "cheap" } }],
+    },
+  });
+  const described = describeConfig(json);
+  expect(described.subAgents).toEqual([{ name: "explorer", keys: ["instruction", "model", "name"] }]);
+  expect(described.agentKeys).toEqual(["instruction", "model", "sub_agents"]);
+  expect(JSON.stringify(described)).not.toContain(secret);
+});
+
+it("reads the control plane URL kagent puts under runtime", () => {
+  const json = JSON.stringify({ runtime: { control_plane_url: "http://kagent-controller.kagent:8083" }, agent: {} });
+  expect(loadRuntimeFromEnv({ KAGENT_CONFIG_JSON: json })).toEqual({ controlPlaneUrl: "http://kagent-controller.kagent:8083" });
+  expect(loadRuntimeFromEnv({ KAGENT_CONFIG_JSON: JSON.stringify({ agent: {} }) })).toEqual({ controlPlaneUrl: undefined });
 });

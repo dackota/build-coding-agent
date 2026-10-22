@@ -35,8 +35,8 @@ it("replies with the scripted model's text over A2A gRPC", async () => {
   await model.close();
 
   expect(got?.reply).toBe(SCRIPTED_REPLY);
-  // A message, not a task: kagent's task store needs an actor identity this agent cannot present yet.
-  expect(got?.kind).toBe("message");
+  // A task, so kagent's controller keeps a record of it and HITL pauses are possible.
+  expect(got?.kind).toBe("task");
   expect(got?.contextId).toBeTruthy();
 });
 

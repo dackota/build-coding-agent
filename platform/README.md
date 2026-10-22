@@ -9,8 +9,8 @@ in `docs/pinned-versions.md`.
 | `make up` | `preflight.sh` (tools, versions, `OPENCODE_KEY`), then `cluster.sh up` (registry `registry:2` on `localhost:5001`, kind cluster `build-coding-agent` from kagent's kind config, registry joined to the `kind` network), then `install.sh` (Substrate and kagent through the pinned kagent CLI, Gateway API CRDs, agentgateway, the key Secret, and kagent's stock agent). Safe to run again. |
 | `make status` | One `ok` or `FAIL` line each for the cluster, the registry, Substrate, kagent, agentgateway, the model route, the stock agent, and the image pins. |
 | `make smoke` | Pushes a tiny image to `localhost:5001`, applies Harness `registry-smoke` with `image@sha256:<digest>`, and sends one message to `stock-agent` through agentgateway (spends model tokens). |
-| `make deploy` | `deploy.sh`: builds `agent/`, pushes it through `localhost:5001`, reads the sha256 digest from the registry, and applies `agent.yaml.tmpl` (Harness, AgentTemplate, Agent `hello-agent`) with the image named by that digest. Waits for the Agent to be Ready. |
-| `make chat MSG=...` | Sends one message to `hello-agent` through the kagent controller (the agent CLI in `agent/`). |
+| `make deploy` | `deploy.sh`: builds `agent/`, pushes it through `localhost:5001`, reads the sha256 digest from the registry, and applies `agent.yaml.tmpl` (Harness, AgentTemplates `hello-agent` and the test subagent `explorer-template`, Agent `hello-agent`) with the image named by that digest. Waits for the Agent to be Ready. |
+| `make chat MSG=...` | Sends one message to `hello-agent` through the kagent controller (the agent CLI in `agent/`). When the agent asks a question, the CLI prints it with the ids to answer with (`agent/README.md`). |
 | `make down` | Deletes the cluster and the registry container. |
 
 The kube context is `kind-build-coding-agent`. Scripts call `kubectl --context` and

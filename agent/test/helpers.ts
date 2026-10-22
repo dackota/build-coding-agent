@@ -31,18 +31,36 @@ export type FakeModel = {
   close: () => Promise<void>;
 };
 
-/** An OpenAI-compatible chat completions stub that always answers `reply`. */
-export async function startFakeModel(reply = SCRIPTED_REPLY): Promise<FakeModel> {
+export type ScriptedReply = string | { toolCall: { name: string; args: unknown } };
+
+/**
+ * An OpenAI-compatible chat completions stub that plays `script` in order (the last entry
+ * repeats). A string is a text reply; `{ toolCall }` makes the model call a tool.
+ */
+export async function startFakeModel(script: ScriptedReply | ScriptedReply[] = SCRIPTED_REPLY): Promise<FakeModel> {
+  const replies = Array.isArray(script) ? script : [script];
   const requests: FakeModel["requests"] = [];
   const server: Server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => {
+      const index = Math.min(requests.length, replies.length - 1);
       requests.push({ headers: req.headers, body: Buffer.concat(chunks).toString("utf8") });
       if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
         res.writeHead(404).end();
         return;
       }
+      const reply = replies[index]!;
+      const message =
+        typeof reply === "string"
+          ? { role: "assistant", content: reply }
+          : {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                { id: `call_${index}`, type: "function", function: { name: reply.toolCall.name, arguments: JSON.stringify(reply.toolCall.args) } },
+              ],
+            };
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
         JSON.stringify({
@@ -50,7 +68,7 @@ export async function startFakeModel(reply = SCRIPTED_REPLY): Promise<FakeModel>
           object: "chat.completion",
           created: 1,
           model: "scripted-model",
-          choices: [{ index: 0, message: { role: "assistant", content: reply }, finish_reason: "stop" }],
+          choices: [{ index: 0, message, finish_reason: typeof reply === "string" ? "stop" : "tool_calls" }],
           usage: { prompt_tokens: 3, completion_tokens: 5, total_tokens: 8 },
         }),
       );
@@ -65,7 +83,7 @@ export async function startFakeModel(reply = SCRIPTED_REPLY): Promise<FakeModel>
   };
 }
 
-export function writeFakeConfig(baseUrl: string): string {
+export function writeFakeConfig(baseUrl: string, opts: { controlPlaneUrl?: string; subAgents?: unknown[] } = {}): string {
   const dir = mkdtempSync(join(tmpdir(), "agent-config-"));
   const path = join(dir, "config.json");
   writeFileSync(
@@ -73,7 +91,7 @@ export function writeFakeConfig(baseUrl: string): string {
     JSON.stringify({
       runtime: {
         gateway_url: "http://unused",
-        control_plane_url: "http://unused",
+        ...(opts.controlPlaneUrl ? { control_plane_url: opts.controlPlaneUrl } : {}),
         name: "hello-agent",
         namespace: "kagent",
         port: 80,
@@ -83,6 +101,7 @@ export function writeFakeConfig(baseUrl: string): string {
         description: "test",
         instruction: "You are a test agent. Reply briefly.",
         stream: false,
+        ...(opts.subAgents ? { sub_agents: opts.subAgents } : {}),
       },
     }),
   );

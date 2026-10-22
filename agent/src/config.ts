@@ -50,3 +50,24 @@ function parseConfig(text: string, path: string): AgentConfig {
     instruction: typeof agent?.instruction === "string" ? agent.instruction : "",
   };
 }
+
+/** runtime.control_plane_url: the controller's runtime API, where Substrate injects the Actor JWT. */
+export function loadRuntimeFromEnv(env: NodeJS.ProcessEnv): { controlPlaneUrl: string | undefined } {
+  const text = env.KAGENT_CONFIG_JSON ?? readFileSync(env.KAGENT_CONFIG_PATH ?? "/config/config.json", "utf8");
+  const url = (JSON.parse(text) as { runtime?: { control_plane_url?: unknown } }).runtime?.control_plane_url;
+  return { controlPlaneUrl: typeof url === "string" && url !== "" ? url : undefined };
+}
+
+/**
+ * What the config holds, by key name only (never a value): the keys under `agent`, and for
+ * each subagent its name and keys. Logged at startup to show whether subagent definitions
+ * reached a byo image.
+ */
+export function describeConfig(json: string): { agentKeys: string[]; subAgents: { name: string; keys: string[] }[] } {
+  const agent = ((JSON.parse(json) as { agent?: Record<string, unknown> }).agent ?? {}) as Record<string, unknown>;
+  const subs = Array.isArray(agent.sub_agents) ? (agent.sub_agents as Record<string, unknown>[]) : [];
+  return {
+    agentKeys: Object.keys(agent).sort(),
+    subAgents: subs.map((s) => ({ name: typeof s.name === "string" ? s.name : "", keys: Object.keys(s).sort() })),
+  };
+}

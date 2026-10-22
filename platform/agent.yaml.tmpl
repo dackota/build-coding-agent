@@ -20,7 +20,23 @@ metadata: {name: hello-agent, namespace: kagent}
 spec:
   description: Hello TypeScript byo agent
   modelConfig: {name: default-model-config}
-  systemPrompt: You are a concise, helpful assistant. Reply briefly.
+  systemPrompt: |
+    You are a concise, helpful assistant. Reply briefly.
+    When a request is ambiguous and the answer is one of a few options, do not guess:
+    call the ask_user tool once with the question and its choices, then use the answer.
+  tools:
+    - subAgent:
+        name: explorer
+        description: Read-only helper that explores and summarizes. Test binding for the S3 spike.
+        templateRef: {name: explorer-template}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata: {name: explorer-template, namespace: kagent}
+spec:
+  description: Test subagent for the S3 spike
+  modelConfig: {name: default-model-config}
+  systemPrompt: You explore and summarize. You are read-only.
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
