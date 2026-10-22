@@ -6,6 +6,7 @@ import { A2AService, grpcService, UserBuilder } from "@a2a-js/sdk/server/grpc";
 import type { EarlyListener } from "./early-listener.ts";
 import { describeConfig, loadConfigFromEnv, loadRuntimeFromEnv } from "./config.ts";
 import { ControllerTaskStore, DEFAULT_IDENTITY_PATH } from "./controller-task-store.ts";
+import { DEFAULT_MAX_TOOL_OUTPUT_CHARS, TRUNCATION_MARKER } from "./context.ts";
 import { createExecutor, type ExecutorOptions } from "./executor.ts";
 import { log } from "./log.ts";
 
@@ -32,13 +33,16 @@ function buildCard(grpcAddr: string, cardJson?: string): AgentCard {
 
 const DEFAULT_MAX_STEPS = 25;
 
-/** AGENT_MAX_STEPS (a positive integer, default 25) and AGENT_SANDBOX ("local", the default, or "memory" for tests). */
+/** AGENT_MAX_STEPS (a positive integer, default 25), AGENT_MAX_TOOL_OUTPUT_CHARS (default 20000) and AGENT_SANDBOX ("local", the default, or "memory" for tests). */
 export function executorOptions(env: NodeJS.ProcessEnv): ExecutorOptions {
   const maxSteps = env.AGENT_MAX_STEPS === undefined ? DEFAULT_MAX_STEPS : Number(env.AGENT_MAX_STEPS);
   if (!Number.isInteger(maxSteps) || maxSteps < 1) throw new Error(`AGENT_MAX_STEPS must be a positive integer, got ${JSON.stringify(env.AGENT_MAX_STEPS)}`);
+  const maxToolOutputChars = env.AGENT_MAX_TOOL_OUTPUT_CHARS === undefined ? DEFAULT_MAX_TOOL_OUTPUT_CHARS : Number(env.AGENT_MAX_TOOL_OUTPUT_CHARS);
+  if (!Number.isInteger(maxToolOutputChars) || maxToolOutputChars < TRUNCATION_MARKER.length + 1)
+    throw new Error(`AGENT_MAX_TOOL_OUTPUT_CHARS must be an integer of at least ${TRUNCATION_MARKER.length + 1}, got ${JSON.stringify(env.AGENT_MAX_TOOL_OUTPUT_CHARS)}`);
   const sandbox = env.AGENT_SANDBOX ?? "local";
   if (sandbox !== "local" && sandbox !== "memory") throw new Error(`AGENT_SANDBOX must be "local" or "memory", got ${JSON.stringify(sandbox)}`);
-  return { maxSteps, sandbox };
+  return { maxSteps, sandbox, maxToolOutputChars };
 }
 
 /** Load config, build the A2A request handler, and serve A2A over gRPC. */

@@ -5,7 +5,6 @@ import { z } from "zod";
 import { relativeInWorkspace, type Sandbox, shellQuote } from "./sandbox.ts";
 import type { ChangeTracker } from "./workspace-diff.ts";
 
-const MAX_READ_CHARS = 100_000;
 const MAX_SEARCH_LINES = 200;
 
 const PATH = z.string().describe("A path relative to the workspace root, such as src/index.ts. Absolute paths and '..' are refused.");
@@ -22,8 +21,8 @@ export function createFileTools(sandbox: Sandbox, changes: ChangeTracker) {
       description: "Read a file in the workspace. Use it before editing a file, to see its exact current text.",
       inputSchema: z.object({ path: PATH }),
       execute: async ({ path }) => {
-        const text = await sandbox.readFile(path);
-        return text.length > MAX_READ_CHARS ? `${text.slice(0, MAX_READ_CHARS)}\n[truncated: the file has ${text.length} characters]` : text;
+        // The executor caps every tool's output (context.ts), so a large file is cut there.
+        return sandbox.readFile(path);
       },
     }),
 

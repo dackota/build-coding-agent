@@ -75,7 +75,7 @@ export async function startFakeModel(script: ScriptedReply | ScriptedReply[] = S
           created: 1,
           model: "scripted-model",
           choices: [{ index: 0, message, finish_reason: typeof reply === "string" ? "stop" : "tool_calls" }],
-          usage: { prompt_tokens: 3, completion_tokens: 5, total_tokens: 8 },
+          usage: { prompt_tokens: 3, completion_tokens: 5, total_tokens: 8, prompt_tokens_details: { cached_tokens: 2 } },
         }),
       );
     });

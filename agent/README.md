@@ -26,3 +26,11 @@ Findings on kagent 1.0.0-alpha17 that shape the code:
 - Subagent templates bound with `tools[].subAgent.templateRef` arrive in `KAGENT_CONFIG_JSON` under `agent.sub_agents`; the agent logs their names and key names at startup (`config-received`).
 
 Skills: a `skills/<name>/SKILL.md` in the workspace (frontmatter `name`, `description`) is listed by name and description in the system prompt. Its body loads only when the model calls `load_skill`. (kagent does not pass skill content to a byo image through its config, so the workspace is the source.)
+
+Context management (`src/context.ts`):
+
+- Every tool's result, and every tool error message, is cut to `AGENT_MAX_TOOL_OUTPUT_CHARS` characters (default 20000), marker included. A cut result ends with `[truncated]`.
+- Tool results before the latest turn (the last user message and everything after it) are replaced with `[old tool result pruned]` in what the model sees. The saved session keeps the full results.
+- Each model step logs one `step-usage` line: `step`, `inputTokens`, `outputTokens`, `cachedTokens` (0 when the gateway reports none).
+
+Prompt caching decision: not requested by the agent, because the provider does it by itself. The agent sends no `cache_control` markers. The OpenCode Go plan (model `glm-5.3-flash`) caches repeated prompt prefixes on its own and reports them as `usage.prompt_tokens_details.cached_tokens`; agentgateway passes that field through unchanged, and `@ai-sdk/openai-compatible` maps it to the `cachedTokens` in the `step-usage` line. Evidence on kind: a 15680-token prompt sent through the gateway twice more returned `usage.prompt_tokens_details.cached_tokens: 12160` both times (a first send of it, not saved, returned 0). Responses: `.scratch/s2-spike/verify/9-r2/gateway-response-1.json` and `gateway-response-2.json`. The short prefixes of the agent's own turns (about 1300 tokens) showed `cachedTokens: 0` in the live runs; a longer session should show hits in the log.

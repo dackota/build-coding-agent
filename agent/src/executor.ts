@@ -6,6 +6,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { type ModelMessage, stepCountIs, tool, ToolLoopAgent } from "ai";
 import { z } from "zod";
 import type { AgentConfig } from "./config.ts";
+import { capTools, pruneMessages } from "./context.ts";
 import { createFileTools } from "./file-tools.ts";
 import { askUserMessage, parseAskUserResponse, type Question } from "./hitl.ts";
 import { createLocalSandbox } from "./local-sandbox.ts";
@@ -24,6 +25,8 @@ export type ExecutorOptions = {
   maxSteps: number;
   /** "local": the workspace directory itself. "memory": just-bash copy-on-write over it, for tests. */
   sandbox: SandboxKind;
+  /** The most characters of any one tool result; longer output is cut with a truncation marker. */
+  maxToolOutputChars: number;
 };
 
 const textPart = (value: string, mediaType = "text/plain") => ({
@@ -150,7 +153,10 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
     }
 
     const skills = await discoverSkills(sandbox);
-    const tools = { ...createFileTools(sandbox, changes), [ASK_USER]: askUserTool, ...(skills.length > 0 ? { load_skill: createSkillTool(skills, taskId) } : {}) };
+    const tools = capTools(
+      { ...createFileTools(sandbox, changes), [ASK_USER]: askUserTool, ...(skills.length > 0 ? { load_skill: createSkillTool(skills, taskId) } : {}) },
+      opts.maxToolOutputChars,
+    );
     const instructions = await turnInstructions(sandbox, taskId, tools, workspaceDir(dataDir, contextId), skills);
     const agent = new ToolLoopAgent({
       model,
@@ -158,11 +164,21 @@ export function createExecutor(config: AgentConfig, dataDir: string, opts: Execu
       tools,
       stopWhen: stepCountIs(opts.maxSteps),
     });
+    let stepNumber = 0;
     const result = await agent.generate({
-      messages,
+      // Old tool results are pruned for the model only; the saved session keeps them.
+      messages: pruneMessages(messages),
       // Save after every step, so a crash mid-turn keeps the steps that finished. A step that
       // calls ask_user is saved as the pause below instead: its call has no result yet.
       onStepFinish: (step) => {
+        stepNumber++;
+        log("step-usage", {
+          taskId,
+          step: stepNumber,
+          inputTokens: step.usage.inputTokens ?? 0,
+          outputTokens: step.usage.outputTokens ?? 0,
+          cachedTokens: step.usage.inputTokenDetails?.cacheReadTokens ?? 0,
+        });
         if (step.toolCalls.some((c) => c?.toolName === ASK_USER)) return;
         saveSession(dataDir, contextId, { ...session, messages: [...messages, ...step.response.messages] });
       },
