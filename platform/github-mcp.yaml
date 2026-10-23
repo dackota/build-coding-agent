@@ -1,11 +1,13 @@
 # The GitHub MCP server for git out: the agent creates a branch, pushes files, and opens a
 # pull request through it. github-mcp-server (http mode, bound to the pod's loopback, only the
-# three tools below) wants a GitHub token on every request; the auth proxy beside it
+# four tools below) wants a GitHub token on every request; the auth proxy beside it
 # (github-mcp-proxy.mjs, ConfigMap github-mcp-proxy made by deploy.sh) adds it from Secret
 # github-mcp-token (made by deploy.sh from GITHUB_TOKEN in .env). The agent calls the proxy
 # with no credential, so the token lives in this pod only. The RemoteMCPServer has no
 # headers for the same reason: kagent would copy them into the agent's config.
-# agent.yaml.tmpl binds the tools with requireApproval, so each call pauses for the user.
+# agent.yaml.tmpl binds create_branch, push_files and create_pull_request with requireApproval, so
+# each call the model makes pauses for the user. issue_read is not bound for the model: the
+# implement loop (agent/src/loop-github.ts) calls it, and its three fixed git calls, from code.
 apiVersion: v1
 kind: Namespace
 metadata: {name: github-mcp}
@@ -23,7 +25,7 @@ spec:
         - name: server
           # deploy.sh fills in GITHUB_MCP_IMAGE from platform/versions.env.
           image: "@GITHUB_MCP_IMAGE@"
-          args: ["http", "--listen-host=127.0.0.1", "--port=8082", "--tools=create_branch,push_files,create_pull_request"]
+          args: ["http", "--listen-host=127.0.0.1", "--port=8082", "--tools=issue_read,create_branch,push_files,create_pull_request"]
         - name: auth-proxy
           # deploy.sh fills in NODE_IMAGE from platform/versions.env (the agent image's base).
           image: "@NODE_IMAGE@"

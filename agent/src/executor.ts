@@ -12,6 +12,7 @@ import { gatewayModel } from "./gateway.ts";
 import { askUserMessage, parseAskUserResponse, parseToolApprovalResponse, type Question, toolApprovalMessage } from "./hitl.ts";
 import { createLocalSandbox } from "./local-sandbox.ts";
 import { log } from "./log.ts";
+import { handleLoopMessage } from "./loop-runner.ts";
 import { createTodoTool, formatTodos, TODO_TOOL, type TodoHolder } from "./todo-tool.ts";
 import { createSkillTool, discoverSkills, type Skill } from "./skills.ts";
 import { readIfExists, type Sandbox, type SandboxHooks, withHooks } from "./sandbox.ts";
@@ -58,6 +59,10 @@ export type ExecutorOptions = {
   sandbox: SandboxKind;
   /** The most characters of any one tool result; longer output is cut with a truncation marker. */
   maxToolOutputChars: number;
+  /** The implement loop's own limit for its setup and test commands (the model's bash keeps the sandbox's). */
+  loopCommandTimeoutMs: number;
+  /** Where the implement loop clones from: <base>/<owner>/<repo>.git. */
+  gitBaseUrl: string;
 };
 
 const textPart = (value: string, mediaType = "text/plain") => ({
@@ -253,6 +258,7 @@ export function createExecutor(
     const loaded = loadSession(dataDir, contextId);
     log("turn", { taskId, contextId, pending: loaded.pending ? loaded.pending.taskId : "", answered: parseAskUserResponse(ctx.userMessage) ? "yes" : "no" });
     const sandbox = await sandboxFor(contextId);
+    if (await runLoopMessage(ctx, bus, signal, loaded, sandbox)) return;
     const turn = await startTurn(ctx, bus, loaded, sandbox);
     if (!turn) return;
     const base: SessionState = turn.approvedKinds.length > 0 ? { ...loaded, approvedKinds: turn.approvedKinds } : loaded;
@@ -265,6 +271,45 @@ export function createExecutor(
     if (pauseOnAskUser(bus, ids, session, turn, result)) return;
     saveSession(dataDir, contextId, { ...session, messages: [...turn.messages, ...result.response.messages], pending: undefined });
     await publishReply(bus, ids, sandbox, turn.changes, result, session.todos);
+  }
+
+  /** The file tools the registry builds (extensions' tool_call handlers included), for the implement loop's subagents. */
+  function loopFileTools(sandbox: Sandbox, changes: ChangeTracker, taskId: string): Record<string, Tool> {
+    const gate = turnGate(new Set(), []);
+    const tools = registry.build({ sandbox, changes, taskId, skills: [], gate, todos: { list: [] } }, {});
+    return capTools(Object.fromEntries(FILE_TOOLS.flatMap((name) => (tools[name] ? [[name, tools[name]]] : []))), opts.maxToolOutputChars);
+  }
+
+  /**
+   * Gives the message to the implement loop when it is the loop's: an /implement command, or the
+   * answer to the loop's start approval. The code reads it here, before any model call.
+   */
+  async function runLoopMessage(ctx: RequestContext, bus: ExecutionEventBus, signal: AbortSignal, session: SessionState, sandbox: Sandbox): Promise<boolean> {
+    const { taskId, contextId } = ctx;
+    const env = {
+      dataDir,
+      taskId,
+      contextId,
+      sandbox,
+      bindings: mcpBindings,
+      subAgents: config.subAgents,
+      commandTimeoutMs: opts.loopCommandTimeoutMs,
+      gitBaseUrl: opts.gitBaseUrl,
+      subAgentOpts: { maxSteps: opts.maxSteps, maxToolOutputChars: opts.maxToolOutputChars },
+      fileTools: (changes: ChangeTracker) => loopFileTools(sandbox, changes, taskId),
+      signal,
+    };
+    const io = {
+      progress: (event: StreamEvent) => publishProgress(bus, taskId, contextId, event),
+      pause: (pause: ToolApprovalPause) => publishApprovalPause(bus, taskId, contextId, pause),
+      ask: (pause: AskUserPause) => publishPause(bus, taskId, contextId, pause.requestId, pause.questions),
+      reply: async (text: string) => {
+        publishArtifact(bus, taskId, contextId, "reply", textPart(text));
+        publishStatus(bus, taskId, contextId, TaskState.TASK_STATE_COMPLETED);
+      },
+    };
+    const { text } = readMessage(ctx.userMessage);
+    return handleLoopMessage({ env, io, session, text, message: ctx.userMessage });
   }
 
   /** Runs the turn with this turn's MCP clients open, and closes them after. */

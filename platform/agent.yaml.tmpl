@@ -14,8 +14,8 @@ spec:
     snapshotPolicy:
       location: gs://ate-snapshots/kagent/
 ---
-# The subagents' own models, both through agentgateway like default-model-config:
-# a cheap one to explore, a stronger one to execute.
+# The subagents' own models, all through agentgateway like default-model-config:
+# a cheap one to explore, a stronger one to execute and to review.
 apiVersion: api.kagent.dev/v1alpha3
 kind: ModelConfig
 metadata: {name: explorer-model-config, namespace: kagent}
@@ -29,6 +29,16 @@ spec:
 apiVersion: api.kagent.dev/v1alpha3
 kind: ModelConfig
 metadata: {name: executor-model-config, namespace: kagent}
+spec:
+  provider: OpenAI
+  model: glm-5.1
+  openAI:
+    apiFormat: chatCompletions
+    baseUrl: http://agentgateway-proxy.agentgateway-system.svc.cluster.local/v1
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata: {name: reviewer-model-config, namespace: kagent}
 spec:
   provider: OpenAI
   model: glm-5.1
@@ -75,6 +85,10 @@ spec:
         name: executor
         description: Does the hard work with full file tools (read, write, edit, search).
         templateRef: {name: executor-template}
+    - subAgent:
+        name: reviewer
+        description: Read-only reviewer that checks a change against the issue or against the repo's AGENTS.md and returns JSON findings.
+        templateRef: {name: reviewer-template}
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
@@ -91,6 +105,14 @@ spec:
   description: Executor subagent with full file tools
   modelConfig: {name: executor-model-config}
   systemPrompt: You carry out the job you are given with the file tools (read_file, write_file, edit_file, search). Read a file before editing it. Reply with a one-line summary of what you changed.
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata: {name: reviewer-template, namespace: kagent}
+spec:
+  description: Read-only reviewer subagent
+  modelConfig: {name: reviewer-model-config}
+  systemPrompt: You review a change with read_file and search, and reply with only the JSON the job asks for. You cannot change files. Report only real problems, each with a severity, the file and one sentence of reason.
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent

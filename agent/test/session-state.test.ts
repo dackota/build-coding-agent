@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import fc from "fast-check";
 import { expect, it } from "vitest";
+import { begin, next } from "../src/loop.ts";
 import { type AtomicIo, loadSession, saveSession, type SessionState } from "../src/session-state.ts";
 
 const pause = (n: number): NonNullable<SessionState["pending"]> => ({
@@ -119,4 +120,22 @@ it("rejects a context id that could leave the sessions directory", () => {
     expect(() => saveSession(dir, bad, state(1))).toThrow(/context id/i);
     expect(() => loadSession(dir, bad)).toThrow(/context id/i);
   }
+});
+
+it("saves and loads the loop state", () => {
+  const dir = mkdtempSync(join(tmpdir(), "state-"));
+  const loop = begin({ owner: "acme", repo: "widgets", number: 12 }).state;
+  const withIssue = next(loop, { type: "read", issue: { title: "T", body: "B", comments: ["c"] }, baseBranch: "main" }).state;
+
+  saveSession(dir, "ctx-1", { ...state(1), loop: withIssue });
+
+  expect(loadSession(dir, "ctx-1").loop).toEqual(withIssue);
+  expect(loadSession(dir, "ctx-1").loop?.step).toBe("ready-check");
+});
+
+it("refuses a loop state with an unknown step", () => {
+  const dir = mkdtempSync(join(tmpdir(), "state-"));
+  mkdirSync(join(dir, "sessions", "ctx-1"), { recursive: true });
+  writeFileSync(join(dir, "sessions", "ctx-1", "state.json"), JSON.stringify({ messages: [], todos: [], loop: { step: "dance" } }));
+  expect(() => loadSession(dir, "ctx-1")).toThrow(/session state/i);
 });

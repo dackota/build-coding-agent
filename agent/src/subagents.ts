@@ -38,23 +38,28 @@ export function createTaskTool(defs: SubAgentDef[], deps: TaskToolDeps): Tool {
     execute: async ({ agent: name, prompt }) => {
       const def = defs.find((d) => d.name === name);
       if (!def) throw new Error(`no subagent named ${JSON.stringify(name)}; available: ${names.join(", ")}`);
-      log("subagent-call", { taskId: deps.taskId, agent: def.name, model: def.model });
-      const model = gatewayModel(def.baseUrl, def.model);
-      let step = 0;
-      const sub = new ToolLoopAgent({
-        model,
-        instructions: def.instruction,
-        tools: toolsFor(def, deps),
-        stopWhen: stepCountIs(deps.opts.maxSteps),
-        onStepFinish: (s) => {
-          logStepUsage(deps.taskId, ++step, s.usage, def.name);
-          for (const part of s.content) {
-            if (part.type === "tool-error") log("subagent-tool-error", { taskId: deps.taskId, agent: def.name, tool: part.toolName, message: capOutput(String((part.error as Error)?.message ?? part.error), 300) });
-          }
-        },
-      });
-      const result = await sub.generate({ prompt });
-      return capOutput(result.text || "(the subagent returned no text)", deps.opts.maxToolOutputChars);
+      return runSubAgent(def, prompt, deps);
     },
   });
+}
+
+/** One fresh run of a subagent on `prompt`: its final text (capped). Used by the task tool and by the implement loop. */
+export async function runSubAgent(def: SubAgentDef, prompt: string, deps: TaskToolDeps): Promise<string> {
+  log("subagent-call", { taskId: deps.taskId, agent: def.name, model: def.model });
+  const model = gatewayModel(def.baseUrl, def.model);
+  let step = 0;
+  const sub = new ToolLoopAgent({
+    model,
+    instructions: def.instruction,
+    tools: toolsFor(def, deps),
+    stopWhen: stepCountIs(deps.opts.maxSteps),
+    onStepFinish: (s) => {
+      logStepUsage(deps.taskId, ++step, s.usage, def.name);
+      for (const part of s.content) {
+        if (part.type === "tool-error") log("subagent-tool-error", { taskId: deps.taskId, agent: def.name, tool: part.toolName, message: capOutput(String((part.error as Error)?.message ?? part.error), 300) });
+      }
+    },
+  });
+  const result = await sub.generate({ prompt });
+  return capOutput(result.text || "(the subagent returned no text)", deps.opts.maxToolOutputChars);
 }

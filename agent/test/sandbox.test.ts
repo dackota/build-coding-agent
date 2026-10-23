@@ -102,3 +102,20 @@ for (const [name, make] of [
     });
   });
 }
+
+it("a per-call timeout replaces the sandbox default for that call only", async () => {
+  const l = layout();
+  const sandbox = await createLocalSandbox(l.workspace, { execTimeoutMs: 300 });
+
+  const stoppedAtDefault = await sandbox.exec("sleep 5");
+  const finishedWithLongerLimit = await sandbox.exec("sleep 1; echo done", { timeoutMs: 5000 });
+  const stoppedAtOwnLimit = await sandbox.exec("sleep 5", { timeoutMs: 200 });
+  const stillDefaultAfter = await sandbox.exec("sleep 5");
+
+  expect(stoppedAtDefault.hasTimedOut).toBe(true);
+  expect(finishedWithLongerLimit).toMatchObject({ stdout: "done\n", exitCode: 0 });
+  expect(finishedWithLongerLimit.hasTimedOut).toBeUndefined();
+  expect(stoppedAtOwnLimit.hasTimedOut).toBe(true);
+  expect(stillDefaultAfter.hasTimedOut).toBe(true);
+  await sandbox.stop();
+});

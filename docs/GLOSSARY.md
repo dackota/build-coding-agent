@@ -31,3 +31,29 @@ _Avoid_: deny (that is a user's approval answer), veto
 **Modify**:
 A handler's replacement of a tool call's input (`tool_call`, checked again against the tool's input schema) or of its output (`tool_result`); later handlers, the tool, and the model see the replacement.
 _Avoid_: rewrite, patch, transform
+
+## Implement loop
+
+**Implement run**:
+One `/implement <issue URL>` from start to a pull request or a park. One run is one issue and one pull request; a session has at most one open run. The agent's code reads the command, not the model.
+_Avoid_: job, task (an A2A task is one turn)
+
+**Step machine**:
+The pure function `next(state, event)` in `agent/src/loop.ts` that gives the run's new state and the one action to do next. It does no I/O; a runner does each action and sends the result back as an event.
+_Avoid_: workflow engine, state graph
+
+**Start approval**:
+The one pause of a run: a `tool_approval_request` that names the exact setup command, the exact test command, the branch, and the repo the pull request goes to. After it, the loop runs those two commands and calls the GitHub MCP server's branch, push and pull request tools with no second approval.
+_Avoid_: confirmation, consent prompt
+
+**Loop command**:
+The approved setup or test command, run by loop code through the `Sandbox` with the loop's own timeout (default 300 s), not through the model's `bash` (60 s).
+_Avoid_: step command
+
+**Park**:
+The run stops before a pull request, tells the user why and shows the last test output, and keeps the workspace and the loop state. `/implement continue [note]` gives a run parked in the build 3 more rounds; `/implement stop` drops it.
+_Avoid_: fail, abort
+
+**Round**:
+One pass of the test-first build and check, counted once for the whole run. The cap is 3; `continue` adds 3. A tests step that writes a non-test file, tests that pass before any code, and red tests after the code each end a round.
+_Avoid_: iteration, attempt

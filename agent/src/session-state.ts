@@ -6,6 +6,7 @@
 import * as fs from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { type LoopState, loopStateSchema } from "./loop.ts";
 import { log } from "./log.ts";
 
 type PauseBase = {
@@ -43,6 +44,8 @@ export type SessionState = {
   todos: Todo[];
   /** The risk kinds ("rm", "redirect") the user approved for the rest of this session. */
   approvedKinds?: string[];
+  /** The implement run of this session, if any: saved after every step. */
+  loop?: LoopState;
 };
 
 /** The fs calls an atomic write makes; a test swaps them to crash part-way. */
@@ -80,6 +83,7 @@ const stateSchema = z.object({
   pending: z.union([toolApprovalSchema, askUserSchema]).optional(),
   todos: z.array(z.object({ content: z.string(), status: z.enum(["pending", "in_progress", "completed"]) })),
   approvedKinds: z.array(z.string()).optional(),
+  loop: loopStateSchema.optional(),
 });
 
 /** <data dir>/<kind>/<contextId>, after checking the context id cannot climb out. */

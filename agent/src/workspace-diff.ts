@@ -33,6 +33,16 @@ export class ChangeTracker {
     return Object.fromEntries(this.before);
   }
 
+  /** The files this turn changed and that still exist, sorted: the ones a pull request carries. */
+  async changedPaths(sandbox: Sandbox): Promise<string[]> {
+    const paths: string[] = [];
+    for (const path of [...this.before.keys()].sort()) {
+      const now = (await readIfExists(sandbox, path)) ?? null;
+      if (now !== null && now !== this.before.get(path)) paths.push(path);
+    }
+    return paths;
+  }
+
   /** A git-style unified diff (a/ and b/ prefixes) of every changed file, sorted by path; "" when nothing changed. */
   async diff(sandbox: Sandbox): Promise<string> {
     const patches: string[] = [];

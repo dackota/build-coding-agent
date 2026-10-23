@@ -200,6 +200,11 @@ function show(event: StreamEvent): void {
     isAtLineStart = event.text.endsWith("\n");
     return;
   }
+  if (event.type === "loop_step") {
+    process.stdout.write(`${isAtLineStart ? "" : "\n"}> implement ${event.step} (round ${event.round}): ${event.result}\n`);
+    isAtLineStart = true;
+    return;
+  }
   const args = JSON.stringify(event.args ?? {});
   process.stdout.write(`${isAtLineStart ? "" : "\n"}> ${event.name} ${args.length > ARGS_PREVIEW_CHARS ? `${args.slice(0, ARGS_PREVIEW_CHARS)}...` : args}\n`);
   isAtLineStart = true;
