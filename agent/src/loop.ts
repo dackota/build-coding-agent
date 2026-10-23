@@ -4,14 +4,25 @@
 // repeated and no sequence of events can throw.
 import { z } from "zod";
 
-export const STEPS = ["read", "ready-check", "commands", "approve", "setup", "build-tests", "check-red", "build-code", "check-green", "pr", "done", "parked", "stopped"] as const;
+export const STEPS = ["read", "ready-check", "commands", "approve", "setup", "build-tests", "check-red", "build-code", "check-green", "review-spec", "review-standards", "pr", "done", "parked", "stopped"] as const;
 export type Step = (typeof STEPS)[number];
+
+export const SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const;
+export const findingSchema = z.object({ severity: z.enum(SEVERITIES), file: z.string(), reason: z.string() });
+/** One review finding: how serious, which file, and why. */
+export type Finding = z.infer<typeof findingSchema>;
+/** What a reviewer must return. */
+export const reviewSchema = z.object({ findings: z.array(findingSchema) });
+/** The two review axes, one fresh reviewer call each per round. */
+export type Axis = "spec" | "standards";
 
 export type Target = { owner: string; repo: string; number: number };
 export type Issue = { title: string; body: string; comments: string[] };
 
 const MAX_OUTPUT_CHARS = 4000;
 const MAX_SLUG_CHARS = 40;
+const MAX_FINDINGS = 50;
+const MAX_FINDING_CHARS = 500;
 const MAX_BRANCH_FILES = 200;
 /** Build, check and review share one round counter with this cap; `continue` adds this many rounds. */
 export const ROUND_CAP = 3;
@@ -40,6 +51,8 @@ export const loopStateSchema = z.object({
   branch: z.string().optional(),
   /** The files the build changed, workspace-relative. */
   changedFiles: z.array(z.string()).optional(),
+  /** The findings of the last review (both axes); the CRITICAL and HIGH ones block the pull request. */
+  findings: z.array(findingSchema).optional(),
   /** The last test run: whether it was green, and its output (capped). */
   testGreen: z.boolean().optional(),
   testOutput: z.string().optional(),
@@ -59,6 +72,7 @@ export type LoopEvent =
   | { type: "setup"; ok: boolean; output: string; timedOut?: boolean | undefined }
   | { type: "built"; ok: boolean; files: string[] }
   | { type: "tested"; green: boolean; output: string; timedOut?: boolean | undefined }
+  | { type: "reviewed"; findings: Finding[] }
   | { type: "branched" }
   | { type: "pushed" }
   | { type: "opened"; url: string }
@@ -75,6 +89,7 @@ export type Action =
   | { kind: "build-tests" }
   | { kind: "build-code" }
   | { kind: "test" }
+  | { kind: "review"; axis: Axis }
   | { kind: "pr-branch" }
   | { kind: "pr-push" }
   | { kind: "pr-open" }
@@ -131,7 +146,18 @@ export function isTestFile(path: string): boolean {
 /** A dependency lockfile by its name. */
 export const isLockfile = (path: string): boolean => LOCKFILES.has(path.split("/").at(-1) ?? "");
 
-/** A parked run that stopped in the build or check can go on with more rounds. */
+/** A finding that stops the pull request. */
+export const isBlocking = (finding: Finding): boolean => finding.severity === "CRITICAL" || finding.severity === "HIGH";
+
+/** The findings as lines for a prompt, a reply or a pull request body: `- [HIGH] file: reason`. */
+export function findingLines(findings: readonly Finding[]): string {
+  return findings.map((f) => `- [${f.severity}] ${f.file}: ${f.reason}`).join("\n");
+}
+
+const boundFindings = (findings: readonly Finding[]): Finding[] =>
+  findings.slice(0, MAX_FINDINGS).map((f) => ({ severity: f.severity, file: f.file.slice(0, MAX_FINDING_CHARS), reason: f.reason.slice(0, MAX_FINDING_CHARS) }));
+
+/** A parked run that stopped in the build, check or review can go on with more rounds. */
 export const canContinue = (state: LoopState): boolean => state.step === "parked" && state.resume !== undefined;
 
 const capped = (text: string): string => (text.length > MAX_OUTPUT_CHARS ? text.slice(-MAX_OUTPUT_CHARS) : text);
@@ -149,6 +175,8 @@ export function actionFor(state: LoopState): Action {
     case "build-code": return { kind: "build-code" };
     case "check-red":
     case "check-green": return { kind: "test" };
+    case "review-spec": return { kind: "review", axis: "spec" };
+    case "review-standards": return { kind: "review", axis: "standards" };
     case "pr": return { kind: (["pr-branch", "pr-push", "pr-open"] as const)[Math.min(state.prStage, 2)]! };
     case "done": return { kind: "finish" };
     case "parked": return { kind: "park" };
@@ -187,7 +215,7 @@ function afterCheck(state: LoopState, event: Extract<LoopEvent, { type: "tested"
     if (!event.green) return move(state, "build-code", { testGreen: false, testOutput: output, feedback: undefined });
     return nextRound(state, "build-tests", { testGreen: true, testOutput: output, feedback: TOO_EARLY }, "the tests passed before any code was written");
   }
-  if (event.green) return move(state, "pr", { testGreen: true, testOutput: output, prStage: 0, feedback: undefined });
+  if (event.green) return move(state, "review-spec", { testGreen: true, testOutput: output, feedback: undefined, findings: [] });
   return nextRound(state, "build-code", { testGreen: false, testOutput: output, feedback: STILL_RED }, "the tests still fail");
 }
 
@@ -212,6 +240,16 @@ function afterCodeWritten(state: LoopState, event: Extract<LoopEvent, { type: "b
   const patch = { changedFiles: union(state.changedFiles, event.files), testGreen: undefined, feedback: undefined };
   if (state.commands?.setup && event.files.some(isLockfile)) return move(state, "setup", { ...patch, afterSetup: "check-green" });
   return move(state, "check-green", patch);
+}
+
+/** The spec review is in: keep its findings and run the standards review. The standards review decides the next step. */
+function afterReview(state: LoopState, event: Extract<LoopEvent, { type: "reviewed" }>): Next {
+  const found = [...(state.findings ?? []), ...boundFindings(event.findings)].slice(0, MAX_FINDINGS);
+  if (state.step === "review-spec") return move(state, "review-standards", { findings: found });
+  const blocking = found.filter(isBlocking);
+  if (blocking.length === 0) return move(state, "pr", { findings: found, prStage: 0, feedback: undefined });
+  const feedback = `A review found problems to fix in your code. Fix each CRITICAL and HIGH finding:\n${findingLines(blocking)}`;
+  return nextRound(state, "build-code", { findings: found, feedback }, "the review still has CRITICAL or HIGH findings");
 }
 
 function afterContinue(state: LoopState, event: Extract<LoopEvent, { type: "continue" }>): Next {
@@ -249,6 +287,7 @@ export function next(state: LoopState, event: LoopEvent): Next {
   if (state.step === "build-tests" && event.type === "built") return afterTestsWritten(state, event);
   if (state.step === "build-code" && event.type === "built") return afterCodeWritten(state, event);
   if ((state.step === "check-red" || state.step === "check-green") && event.type === "tested") return afterCheck(state, event);
+  if ((state.step === "review-spec" || state.step === "review-standards") && event.type === "reviewed") return afterReview(state, event);
   if (state.step === "pr" && state.prStage === 0 && event.type === "branched") return move(state, "pr", { prStage: 1 });
   if (state.step === "pr" && state.prStage === 1 && event.type === "pushed") return move(state, "pr", { prStage: 2 });
   if (state.step === "pr" && state.prStage >= 2 && event.type === "opened") return move(state, "done", { prUrl: event.url });

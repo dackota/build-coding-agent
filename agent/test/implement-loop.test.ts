@@ -30,6 +30,7 @@ const SENTINELS = ["SENTINEL-ISSUE-BODY", "SENTINEL-ISSUE-COMMENT", "SENTINEL-FI
 const SUB_AGENTS = [
   { name: "explorer", description: "read-only", instruction: "You explore.", model: { model: "cheap-model" }, stream: false },
   { name: "executor", description: "full tools", instruction: "You execute.", model: { model: "strong-model" }, stream: false },
+  { name: "reviewer", description: "read-only reviewer", instruction: "You review.", model: { model: "review-model" }, stream: false },
 ];
 const READY: ScriptedReply = '{"ready": true, "reason": "says what to build and how to test it"}';
 const write = (path: string, content: string): ScriptedReply => ({ toolCall: { name: "write_file", args: { path, content } } });
@@ -44,8 +45,12 @@ const TESTS_STEP: ScriptedReply[] = [write("test/feature.test.sh", "test -f feat
 const CODE_STEP: ScriptedReply[] = [write("feature.txt", "SENTINEL-FILE-CONTENT\n"), "Wrote feature.txt."];
 /** A code step that leaves the tests red. */
 const WRONG_CODE: ScriptedReply[] = [write("wrong.txt", "nope\n"), "Wrote wrong.txt."];
-/** A happy-path script: ready check, tests, then code. */
-const HAPPY: ScriptedReply[] = [READY, ...TESTS_STEP, ...CODE_STEP];
+/** The two reviews of a round (spec, then standards), both clean. */
+const NO_FINDINGS = '{"findings": []}';
+const CLEAN_REVIEWS: ScriptedReply[] = [NO_FINDINGS, NO_FINDINGS];
+const findings = (...items: { severity: string; file: string; reason: string }[]): string => JSON.stringify({ findings: items });
+/** A happy-path script: ready check, tests, code, then two clean reviews. */
+const HAPPY: ScriptedReply[] = [READY, ...TESTS_STEP, ...CODE_STEP, ...CLEAN_REVIEWS];
 
 /** A repo served over file://, where https://github.com/<owner>/<repo>.git would be. */
 function makeGitHost(owner: string, repo: string, files: Record<string, string>): string {
@@ -122,6 +127,8 @@ const approve = (paused: Turn, contextId: string) =>
 const calledTools = () => mcp!.calls.map((c) => c.name);
 /** The request bodies of the executor subagent's model calls, in order. */
 const executorBodies = () => model!.requests.map((r) => r.body).filter((b) => b.includes("strong-model"));
+/** The request bodies of the reviewer subagent's model calls, in order. */
+const reviewerBodies = () => model!.requests.map((r) => r.body).filter((b) => b.includes("review-model"));
 const loopLines = () =>
   agent!
     .output()
@@ -206,7 +213,7 @@ describe("/implement on a ready issue", () => {
 
     const lines = loopLines();
 
-    expect(lines.map((l) => l.step)).toEqual(["read", "ready-check", "commands", "approve", "setup", "build-tests", "check-red", "build-code", "check-green", "pr", "pr", "pr"]);
+    expect(lines.map((l) => l.step)).toEqual(["read", "ready-check", "commands", "approve", "setup", "build-tests", "check-red", "build-code", "check-green", "review-spec", "review-standards", "pr", "pr", "pr"]);
     for (const line of lines) {
       expect(Object.keys(line).sort()).toEqual(["event", "result", "round", "step", "t", "taskId"]);
       expect(line.round).toBe(1);
@@ -319,7 +326,7 @@ const THREE_RED: ScriptedReply[] = [READY, ...TESTS_STEP, ...WRONG_CODE, "Still 
 
 describe("test-first rounds", () => {
   it("sends tests that pass at once back to the executor, and says so in the next prompt", async () => {
-    const { contextId } = await boot([READY, write("test/feature.test.sh", "true\n"), "Wrote a test.", ...TESTS_STEP, ...CODE_STEP]);
+    const { contextId } = await boot([READY, write("test/feature.test.sh", "true\n"), "Wrote a test.", ...TESTS_STEP, ...CODE_STEP, ...CLEAN_REVIEWS]);
     const paused = await turn({ text: IMPLEMENT, contextId });
 
     const done = await approve(paused, contextId);
@@ -332,7 +339,7 @@ describe("test-first rounds", () => {
   });
 
   it("sends back a non-test file written with the tests", async () => {
-    const { contextId } = await boot([READY, write("feature.txt", "early\n"), "Wrote it.", ...TESTS_STEP, ...CODE_STEP]);
+    const { contextId } = await boot([READY, write("feature.txt", "early\n"), "Wrote it.", ...TESTS_STEP, ...CODE_STEP, ...CLEAN_REVIEWS]);
     const paused = await turn({ text: IMPLEMENT, contextId });
 
     const done = await approve(paused, contextId);
@@ -345,7 +352,7 @@ describe("test-first rounds", () => {
   });
 
   it("goes back to the executor on red after the code, then opens the pull request on green", async () => {
-    const { contextId } = await boot([READY, ...TESTS_STEP, ...WRONG_CODE, ...CODE_STEP]);
+    const { contextId } = await boot([READY, ...TESTS_STEP, ...WRONG_CODE, ...CODE_STEP, ...CLEAN_REVIEWS]);
     const paused = await turn({ text: IMPLEMENT, contextId });
 
     const done = await approve(paused, contextId);
@@ -370,7 +377,7 @@ describe("test-first rounds", () => {
   });
 
   it("continue gives a parked run three more rounds and puts the note in the next executor prompt", async () => {
-    const { contextId } = await boot([...THREE_RED, ...CODE_STEP]);
+    const { contextId } = await boot([...THREE_RED, ...CODE_STEP, ...CLEAN_REVIEWS]);
     const paused = await turn({ text: IMPLEMENT, contextId });
     const parked = await approve(paused, contextId);
     expect(parked.text).toMatch(/parked/i);
@@ -427,7 +434,7 @@ describe("test-first rounds", () => {
   });
 
   it("runs setup once when no lockfile changes across rounds", async () => {
-    const { contextId, workspace } = await boot([READY, ...TESTS_STEP, ...WRONG_CODE, ...CODE_STEP], { files: SETUP_REPO });
+    const { contextId, workspace } = await boot([READY, ...TESTS_STEP, ...WRONG_CODE, ...CODE_STEP, ...CLEAN_REVIEWS], { files: SETUP_REPO });
     const paused = await turn({ text: IMPLEMENT, contextId });
 
     const done = await approve(paused, contextId);
@@ -438,12 +445,138 @@ describe("test-first rounds", () => {
 
   it("runs setup again when the executor changes the lockfile", async () => {
     const lockfileCode: ScriptedReply[] = [write("feature.txt", "SENTINEL-FILE-CONTENT\n"), write("package-lock.json", "{}\n"), "Wrote feature and lockfile."];
-    const { contextId, workspace } = await boot([READY, ...TESTS_STEP, ...lockfileCode], { files: SETUP_REPO });
+    const { contextId, workspace } = await boot([READY, ...TESTS_STEP, ...lockfileCode, ...CLEAN_REVIEWS], { files: SETUP_REPO });
     const paused = await turn({ text: IMPLEMENT, contextId });
 
     const done = await approve(paused, contextId);
 
     expect(done.text).toBe(PR_URL);
     expect(readFileSync(join(workspace, "setup.log"), "utf8").trim().split("\n")).toEqual(["ran", "ran"]);
+  });
+});
+
+const HIGH_SPEC = findings({ severity: "HIGH", file: "feature.txt", reason: "SENTINEL-REVIEW-REASON: ignores empty names" });
+const MEDIUM_LOW = findings({ severity: "MEDIUM", file: "feature.txt", reason: "long line" }, { severity: "LOW", file: "test/feature.test.sh", reason: "vague test name" });
+const BAD_JSON = "I looked and it seems fine.";
+/** A fix round: the executor writes the code again, then the loop's tests run. */
+const FIX_STEP: ScriptedReply[] = [write("feature.txt", "SENTINEL-FILE-CONTENT fixed\n"), "Fixed."];
+
+describe("two-axis review", () => {
+  it("makes a fresh spec and a fresh standards call to the reviewer, and the main model is never called", async () => {
+    const { contextId } = await boot(HAPPY);
+    const paused = await turn({ text: IMPLEMENT, contextId });
+
+    const done = await approve(paused, contextId);
+
+    expect(done.text).toBe(PR_URL);
+    const prompts = reviewerBodies();
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toMatch(/does the change do what the issue asks/i);
+    expect(prompts[0]).toContain("SENTINEL-ISSUE-BODY");
+    expect(prompts[1]).toMatch(/AGENTS\.md/);
+    expect(prompts[1]).not.toMatch(/does the change do what the issue asks/i);
+    expect(agent!.output().match(/"event":"subagent-call"[^\n]*"agent":"reviewer"/g)).toHaveLength(2);
+  });
+
+  it("sends a HIGH finding to the executor as a fix round, then opens the pull request after clean reviews", async () => {
+    const { contextId } = await boot([READY, ...TESTS_STEP, ...CODE_STEP, HIGH_SPEC, NO_FINDINGS, ...FIX_STEP, ...CLEAN_REVIEWS]);
+    const paused = await turn({ text: IMPLEMENT, contextId });
+
+    const done = await approve(paused, contextId);
+
+    expect(done.text).toBe(PR_URL);
+    const prompts = executorBodies();
+    expect(prompts.slice(0, 3).some((b) => b.includes("SENTINEL-REVIEW-REASON"))).toBe(false);
+    expect(prompts.at(-2)).toContain("SENTINEL-REVIEW-REASON");
+    expect(prompts.at(-2)).toContain("feature.txt");
+    expect(reviewerBodies()).toHaveLength(4);
+    expect(loopLines().filter((l) => l.step === "review-spec").map((l) => l.round)).toEqual([1, 2]);
+    expect(calledTools().filter((n) => n === "create_pull_request")).toHaveLength(1);
+    expect(agent!.output()).not.toContain("SENTINEL-REVIEW-REASON");
+  });
+
+  it("puts MEDIUM and LOW findings in the pull request body and does not block on them", async () => {
+    const { contextId } = await boot([READY, ...TESTS_STEP, ...CODE_STEP, MEDIUM_LOW, NO_FINDINGS]);
+    const paused = await turn({ text: IMPLEMENT, contextId });
+
+    const done = await approve(paused, contextId);
+
+    expect(done.text).toBe(PR_URL);
+    const body = (mcp!.calls.find((c) => c.name === "create_pull_request")!.args as { body: string }).body;
+    expect(body).toContain("MEDIUM");
+    expect(body).toContain("long line");
+    expect(body).toContain("LOW");
+    expect(body).toContain("vague test name");
+    expect(body.trimEnd().endsWith("Closes #12")).toBe(true);
+    expect(executorBodies().some((b) => b.includes("A review found problems"))).toBe(false);
+  });
+
+  it("retries a review once with the validation error when it returns bad JSON, and goes on", async () => {
+    const { contextId } = await boot([READY, ...TESTS_STEP, ...CODE_STEP, BAD_JSON, NO_FINDINGS, NO_FINDINGS]);
+    const paused = await turn({ text: IMPLEMENT, contextId });
+
+    const done = await approve(paused, contextId);
+
+    expect(done.text).toBe(PR_URL);
+    const prompts = reviewerBodies();
+    expect(prompts).toHaveLength(3);
+    expect(prompts[1]).toMatch(/not valid/i);
+    expect(calledTools()).toContain("create_branch");
+  });
+
+  it("parks when a review returns bad JSON twice, and makes no branch", async () => {
+    const { contextId } = await boot([READY, ...TESTS_STEP, ...CODE_STEP, BAD_JSON, BAD_JSON]);
+    const paused = await turn({ text: IMPLEMENT, contextId });
+
+    const got = await approve(paused, contextId);
+
+    expect(got.state).toBe(TaskState.TASK_STATE_COMPLETED);
+    expect(got.text).toMatch(/parked/i);
+    expect(got.text).toMatch(/review/i);
+    expect(calledTools()).not.toContain("create_branch");
+    expect(reviewerBodies()).toHaveLength(2);
+  });
+
+  it("rejects a finding with an unknown severity as invalid output", async () => {
+    const wrong = findings({ severity: "SEVERE", file: "a", reason: "b" });
+    const { contextId } = await boot([READY, ...TESTS_STEP, ...CODE_STEP, wrong, wrong]);
+    const paused = await turn({ text: IMPLEMENT, contextId });
+
+    const got = await approve(paused, contextId);
+
+    expect(got.text).toMatch(/parked/i);
+    expect(calledTools()).not.toContain("create_branch");
+  });
+
+  it("parks at the cap with the open findings in the reply when a HIGH comes every round", async () => {
+    const { contextId } = await boot([READY, ...TESTS_STEP, ...CODE_STEP, HIGH_SPEC, NO_FINDINGS, ...FIX_STEP, HIGH_SPEC, NO_FINDINGS, ...FIX_STEP, HIGH_SPEC, NO_FINDINGS]);
+    const paused = await turn({ text: IMPLEMENT, contextId });
+
+    const got = await approve(paused, contextId);
+
+    expect(got.state).toBe(TaskState.TASK_STATE_COMPLETED);
+    expect(got.text).toMatch(/parked/i);
+    expect(got.text).toMatch(/3 rounds/);
+    expect(got.text).toContain("HIGH");
+    expect(got.text).toContain("SENTINEL-REVIEW-REASON");
+    expect(got.text).toContain("feature.txt");
+    expect(calledTools()).not.toContain("create_branch");
+    expect(reviewerBodies()).toHaveLength(6);
+  });
+
+  it("gives the reviewer only read_file and search: a write_file attempt comes back as an unavailable-tool error", async () => {
+    const attempt: ScriptedReply = write("sneaky.txt", "nope\n");
+    const { contextId, workspace } = await boot([READY, ...TESTS_STEP, ...CODE_STEP, attempt, NO_FINDINGS, NO_FINDINGS]);
+    const paused = await turn({ text: IMPLEMENT, contextId });
+
+    const done = await approve(paused, contextId);
+
+    expect(done.text).toBe(PR_URL);
+    expect(existsSync(join(workspace, "sneaky.txt"))).toBe(false);
+    const prompts = reviewerBodies();
+    expect(prompts[0]).not.toContain('"name":"write_file"');
+    expect(prompts[0]).toContain('"name":"read_file"');
+    expect(prompts[1]).toMatch(/write_file/);
+    expect(agent!.output()).toMatch(/"event":"subagent-tool-error".*"agent":"reviewer".*"tool":"write_file"/);
   });
 });

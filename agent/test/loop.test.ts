@@ -4,9 +4,10 @@ import { type Action, actionFor, begin, branchName, canContinue, isLockfile, isT
 
 const TARGET = { owner: "acme", repo: "widgets", number: 12 };
 const ISSUE = { title: "Add a farewell function", body: "Say goodbye.", comments: [] as string[] };
-const ACTION_KINDS = ["read", "ready-check", "commands", "approve", "setup", "build-tests", "build-code", "test", "pr-branch", "pr-push", "pr-open", "finish", "park", "noop"];
+const ACTION_KINDS = ["read", "ready-check", "commands", "approve", "setup", "build-tests", "build-code", "test", "review", "pr-branch", "pr-push", "pr-open", "finish", "park", "noop"];
 
 const text = fc.string({ maxLength: 40 });
+const findingArb = fc.record({ severity: fc.constantFrom("CRITICAL", "HIGH", "MEDIUM", "LOW"), file: text, reason: text });
 const eventArb: fc.Arbitrary<LoopEvent> = fc.oneof(
   fc.record({ type: fc.constant("read" as const), issue: fc.record({ title: text, body: text, comments: fc.array(text, { maxLength: 3 }) }), baseBranch: text }),
   fc.record({ type: fc.constant("ready" as const), ready: fc.boolean(), reason: text }),
@@ -14,6 +15,7 @@ const eventArb: fc.Arbitrary<LoopEvent> = fc.oneof(
   fc.record({ type: fc.constant("approval" as const), approved: fc.boolean(), reason: fc.option(text, { nil: undefined }) }),
   fc.record({ type: fc.constant("setup" as const), ok: fc.boolean(), output: text, timedOut: fc.option(fc.boolean(), { nil: undefined }) }),
   fc.record({ type: fc.constant("built" as const), ok: fc.boolean(), files: fc.array(text, { maxLength: 3 }) }),
+  fc.record({ type: fc.constant("reviewed" as const), findings: fc.array(findingArb, { maxLength: 4 }) }),
   fc.record({ type: fc.constant("tested" as const), green: fc.boolean(), output: fc.oneof(text, fc.constant("")), timedOut: fc.option(fc.boolean(), { nil: undefined }) }),
   fc.constant({ type: "branched" as const }),
   fc.constant({ type: "pushed" as const }),
@@ -35,6 +37,7 @@ function eventFor(action: Action, ok: boolean, words: string): LoopEvent | undef
     case "build-code": return { type: "built", ok: true, files: ok ? ["a.js"] : ["package-lock.json"] };
     case "park": return { type: "continue", note: words };
     case "test": return { type: "tested", green: ok, output: words };
+    case "review": return { type: "reviewed", findings: ok ? [] : [{ severity: "HIGH", file: "a.js", reason: words }] };
     case "pr-branch": return { type: "branched" };
     case "pr-push": return { type: "pushed" };
     case "pr-open": return { type: "opened", url: "https://github.com/acme/widgets/pull/1" };
@@ -79,6 +82,8 @@ describe("the loop step machine", () => {
       { type: "tested", green: false, output: "1 failing" },
       { type: "built", ok: true, files: ["farewell.js"] },
       { type: "tested", green: true, output: "ok" },
+      { type: "reviewed", findings: [] },
+      { type: "reviewed", findings: [] },
       { type: "branched" },
       { type: "pushed" },
       { type: "opened", url: "https://github.com/acme/widgets/pull/7" },
@@ -86,7 +91,7 @@ describe("the loop step machine", () => {
       ({ state, action } = next(state, event));
       kinds.push(action.kind);
     }
-    expect(kinds).toEqual(["read", "ready-check", "commands", "approve", "setup", "build-tests", "test", "build-code", "test", "pr-branch", "pr-push", "pr-open", "finish"]);
+    expect(kinds).toEqual(["read", "ready-check", "commands", "approve", "setup", "build-tests", "test", "build-code", "test", "review", "review", "pr-branch", "pr-push", "pr-open", "finish"]);
     expect(state.step).toBe("done");
     expect(state.prUrl).toBe("https://github.com/acme/widgets/pull/7");
   });
@@ -118,21 +123,41 @@ describe("the loop step machine", () => {
     expect(branchName(7, "x".repeat(200)).length).toBeLessThanOrEqual("implement/7-".length + 40);
   });
 
-  it("never starts the pull request before a green check after the last build", () => {
+  it("never starts the pull request before a green check after the last build and a clean review after it", () => {
     fc.assert(
       fc.property(seedsArb, (seeds) => {
         const trace = drive(seeds);
         trace.forEach((t, i) => {
           if (!t.action.kind.startsWith("pr-") || t.before.step === "pr") return;
-          // The event that opened the pull request stage is a green test result in the check step.
-          expect(t.before.step).toBe("check-green");
-          expect(t.event).toMatchObject({ type: "tested", green: true });
+          // The event that opened the pull request stage is the standards review.
+          expect(t.before.step).toBe("review-standards");
+          expect(t.event.type).toBe("reviewed");
           const events = trace.slice(0, i + 1).map((x) => x.event);
           const lastBuilt = events.map((e) => e.type).lastIndexOf("built");
           expect(events.slice(lastBuilt + 1).some((e) => e.type === "tested" && e.green)).toBe(true);
         });
       }),
       { numRuns: 300 },
+    );
+  });
+
+  it("never opens the pull request while a CRITICAL or HIGH finding is open from the last review", () => {
+    const isBlocking = (f: { severity: string }) => f.severity === "CRITICAL" || f.severity === "HIGH";
+    fc.assert(
+      fc.property(seedsArb, (seeds) => {
+        const trace = drive(seeds);
+        trace.forEach((t, i) => {
+          if (!t.action.kind.startsWith("pr-")) return;
+          expect((t.after.findings ?? []).some(isBlocking)).toBe(false);
+          // Every review since the last build came back without a blocking finding.
+          const events = trace.slice(0, i + 1).map((x) => x.event);
+          const lastBuilt = events.map((e) => e.type).lastIndexOf("built");
+          const reviews = events.slice(lastBuilt + 1).filter((e): e is Extract<LoopEvent, { type: "reviewed" }> => e.type === "reviewed");
+          expect(reviews).toHaveLength(2);
+          for (const r of reviews) expect(r.findings.some(isBlocking)).toBe(false);
+        });
+      }),
+      { numRuns: 500 },
     );
   });
 
@@ -348,5 +373,60 @@ describe("test-first build", () => {
       }),
       { numRuns: 500 },
     );
+  });
+});
+
+const REVIEWED_CLEAN: LoopEvent = { type: "reviewed", findings: [] };
+const HIGH = { severity: "HIGH", file: "a.js", reason: "does not handle empty names" } as const;
+const LOW = { severity: "LOW", file: "a.js", reason: "name is vague" } as const;
+const TO_REVIEW: LoopEvent[] = [...TO_APPROVED, TESTS_WRITTEN, RED, CODE_WRITTEN, GREEN];
+
+describe("two-axis review", () => {
+  it("reviews spec, then standards, after a green check, and opens the pull request when both are clean", () => {
+    const atSpec = runTo(TO_REVIEW);
+    expect(atSpec.state.step).toBe("review-spec");
+    expect(atSpec.action).toEqual({ kind: "review", axis: "spec" });
+    const atStandards = next(atSpec.state, REVIEWED_CLEAN);
+    expect(atStandards.action).toEqual({ kind: "review", axis: "standards" });
+    expect(next(atStandards.state, REVIEWED_CLEAN).action.kind).toBe("pr-branch");
+  });
+
+  it("sends a CRITICAL or HIGH finding back to the code step with the findings, in the next round", () => {
+    const atStandards = next(runTo(TO_REVIEW).state, { type: "reviewed", findings: [HIGH] });
+    const got = next(atStandards.state, REVIEWED_CLEAN);
+    expect(got.state.step).toBe("build-code");
+    expect(got.state.round).toBe(2);
+    expect(got.state.feedback).toContain("does not handle empty names");
+    expect(got.state.feedback).toContain("HIGH");
+    expect(got.state.feedback).toContain("a.js");
+    expect(got.action.kind).toBe("build-code");
+  });
+
+  it("keeps MEDIUM and LOW findings for the pull request and does not block on them", () => {
+    const atStandards = next(runTo(TO_REVIEW).state, { type: "reviewed", findings: [LOW] });
+    const got = next(atStandards.state, { type: "reviewed", findings: [{ severity: "MEDIUM", file: "b.js", reason: "long function" }] });
+    expect(got.action.kind).toBe("pr-branch");
+    expect(got.state.findings?.map((f) => f.severity).sort()).toEqual(["LOW", "MEDIUM"]);
+  });
+
+  it("parks at the cap with the findings still open, and a fix round after continue starts from the code step", () => {
+    let got = runTo(TO_REVIEW);
+    for (let round = 1; round < ROUND_CAP; round++) {
+      got = next(next(got.state, { type: "reviewed", findings: [HIGH] }).state, REVIEWED_CLEAN);
+      got = next(next(got.state, CODE_WRITTEN).state, GREEN);
+    }
+    expect(got.state.round).toBe(ROUND_CAP);
+    const parked = next(next(got.state, { type: "reviewed", findings: [HIGH] }).state, REVIEWED_CLEAN);
+    expect(parked.action.kind).toBe("park");
+    expect(parked.state.findings).toEqual([HIGH]);
+    expect(parked.state.reason).toMatch(/3 rounds/);
+    expect(canContinue(parked.state)).toBe(true);
+    expect(next(parked.state, { type: "continue" }).state.step).toBe("build-code");
+  });
+
+  it("parks a run whose review failed, and cannot continue it", () => {
+    const parked = next(runTo(TO_REVIEW).state, { type: "failed", code: "review-invalid", reason: "bad json" });
+    expect(parked.action.kind).toBe("park");
+    expect(canContinue(parked.state)).toBe(false);
   });
 });

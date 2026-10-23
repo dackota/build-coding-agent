@@ -9,7 +9,7 @@ import type { Tool } from "ai";
 import { z } from "zod";
 import type { SubAgentDef } from "./config.ts";
 import { parseToolApprovalResponse } from "./hitl.ts";
-import { type Action, begin, canContinue, isHeld, isTestFile, type Issue, type LoopEvent, type LoopState, type Next, next, parseImplementCommand, ROUND_CAP, type Target } from "./loop.ts";
+import { type Action, type Axis, begin, canContinue, findingLines, isBlocking, isHeld, isTestFile, type Issue, type LoopEvent, type LoopState, type Next, next, parseImplementCommand, ROUND_CAP, reviewSchema, type Target } from "./loop.ts";
 import { findCommands } from "./loop-commands.ts";
 import { type Github, openGithub } from "./loop-github.ts";
 import { log } from "./log.ts";
@@ -84,11 +84,11 @@ function readyPrompt(target: Target, issue: Issue, previousError?: string): stri
 }
 
 /** The JSON object in a reply (the first `{` to the last `}`), checked against the schema. */
-function parseReady(text: string): z.infer<typeof readyAnswer> {
+function parseJsonReply<T>(text: string, schema: z.ZodType<T>): T {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start === -1 || end < start) throw new Error("no JSON object");
-  return readyAnswer.parse(JSON.parse(text.slice(start, end + 1)));
+  return schema.parse(JSON.parse(text.slice(start, end + 1)));
 }
 
 const tail = (text: string): string => (text.length > OUTPUT_TAIL_CHARS ? `...${text.slice(-OUTPUT_TAIL_CHARS)}` : text);
@@ -96,10 +96,12 @@ const tail = (text: string): string => (text.length > OUTPUT_TAIL_CHARS ? `...${
 function pullRequestBody(state: LoopState, target: Target): string {
   const test = state.commands?.test ?? "";
   const files = (state.changedFiles ?? []).slice(0, MAX_CHANGED_FILES_IN_BODY).map((f) => `- ${f}`).join("\n");
+  const notes = (state.findings ?? []).filter((f) => !isBlocking(f));
   return [
     `Implements ${target.owner}/${target.repo}#${target.number} (https://github.com/${target.owner}/${target.repo}/issues/${target.number}).`,
     `Test result: \`${test}\` passed.\n\n\`\`\`\n${tail(state.testOutput ?? "").trim()}\n\`\`\``,
     `Changed files:\n${files}`,
+    ...(notes.length > 0 ? [`Review findings (MEDIUM and LOW, not blocking):\n${findingLines(notes)}`] : []),
     `Closes #${target.number}`,
   ].join("\n\n");
 }
@@ -146,7 +148,7 @@ async function readyCheck(env: LoopEnv, state: LoopState): Promise<LoopEvent> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const text = await runSubAgent(subAgent(env, "explorer"), readyPrompt(state.target, issue, error), deps);
     try {
-      const answer = parseReady(text);
+      const answer = parseJsonReply(text, readyAnswer);
       return { type: "ready", ready: answer.ready, reason: answer.reason };
     } catch (err) {
       error = (err as Error).message;
@@ -200,6 +202,40 @@ async function build(env: LoopEnv, state: LoopState, kind: "tests" | "code"): Pr
   return { type: "built", ok: true, files };
 }
 
+const MAX_DIFF_CHARS = 12000;
+const SPEC_QUESTION = "Does the change do what the issue asks? Check every requirement and acceptance criterion in the issue against the diff and the code. A missing or wrong behaviour is a finding.";
+const STANDARDS_QUESTION = "Does the change follow this repository's coding standards? Read AGENTS.md (read_file) and check the diff against each rule it states. If there is no AGENTS.md, only report clear defects of style or structure.";
+
+/** The diff of the files the build changed against the clone's HEAD, capped; new files show in full. */
+async function changeDiff(env: LoopEnv, files: readonly string[]): Promise<string> {
+  if (files.length === 0) return "";
+  const paths = files.map(shellQuote).join(" ");
+  const got = await env.sandbox.exec(`git add -N -- ${paths} && git diff HEAD -- ${paths}`);
+  const diff = got.stdout;
+  return diff.length > MAX_DIFF_CHARS ? `${diff.slice(0, MAX_DIFF_CHARS)}\n... (diff cut; read the files for the rest)` : diff;
+}
+
+function reviewPrompt(axis: Axis, state: LoopState, diff: string, previousError?: string): string {
+  const retry = previousError ? `\n\nYour last reply was not valid (${previousError}). Reply with only the JSON object.` : "";
+  return `You are reviewing a change to the repository in your workspace. ${axis === "spec" ? SPEC_QUESTION : STANDARDS_QUESTION} You may read the repository (read_file, search); you cannot change it. Reply with only a JSON object: {"findings": [{"severity": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW", "file": "path", "reason": "one sentence"}]}. Use CRITICAL or HIGH only for a problem that must be fixed before the change merges. An empty list means no findings.${retry}\n\n${issueText(state.target, state.issue!)}\nFiles changed: ${(state.changedFiles ?? []).join(", ")}\n\nDiff:\n${diff}`;
+}
+
+/** One fresh reviewer call; invalid output gets one retry with the validation error. */
+async function review(env: LoopEnv, state: LoopState, axis: Axis): Promise<LoopEvent> {
+  const diff = await changeDiff(env, state.changedFiles ?? []);
+  const deps = { fileTools: env.fileTools(new ChangeTracker()), taskId: env.taskId, opts: env.subAgentOpts };
+  let error: string | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const text = await runSubAgent(subAgent(env, "reviewer"), reviewPrompt(axis, state, diff, error), deps);
+    try {
+      return { type: "reviewed", findings: parseJsonReply(text, reviewSchema).findings };
+    } catch (err) {
+      error = (err as Error).message;
+    }
+  }
+  return { type: "failed", code: "review-invalid", reason: `the ${axis} review did not return valid JSON findings (${error})` };
+}
+
 async function pushChangedFiles(env: LoopEnv, state: LoopState): Promise<void> {
   const files = await Promise.all((state.changedFiles ?? []).map(async (path) => ({ path, content: await env.sandbox.readFile(path) })));
   const message = `${state.issue?.title ?? "Implement issue"} (#${state.target.number})`;
@@ -220,6 +256,7 @@ async function perform(env: LoopEnv, state: LoopState, action: Action, hadPriorR
       const got = await runLoopCommand(env, state.commands!.test);
       return { type: "tested", green: got.ok, output: got.output, timedOut: got.timedOut };
     }
+    case "review": return review(env, state, action.axis);
     case "pr-branch":
       await withGithub(env, (gh) => gh.createBranch(target, branch!, baseBranch!));
       return { type: "branched" };
@@ -245,8 +282,10 @@ function report(env: LoopEnv, io: LoopIo, before: LoopState, after: LoopState): 
 
 function parkedText(state: LoopState): string {
   const output = state.testOutput ? `\n\nLast test output:\n${tail(state.testOutput)}` : "";
+  const open = (state.findings ?? []).filter(isBlocking);
+  const findings = open.length > 0 ? `\n\nOpen findings:\n${findingLines(open)}` : "";
   const nextHint = canContinue(state) ? `\nSend /implement continue [note] for ${ROUND_CAP} more rounds, or /implement stop to drop the run.` : "\nSend /implement stop to drop the run.";
-  return `Parked: ${state.reason ?? "the run stopped"}${output}\nThe workspace and the run's state are kept.${nextHint}`;
+  return `Parked: ${state.reason ?? "the run stopped"}${output}${findings}\nThe workspace and the run's state are kept.${nextHint}`;
 }
 
 /** Saves the state, then does actions until the run finishes, parks, or pauses for the start approval. */
