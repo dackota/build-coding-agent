@@ -33,14 +33,17 @@ first_line() { printf '%s\n' "$1" | head -n 1; }
 # a plain assignment so a failing tool stops the script (set -e is off in conditions).
 has_line() { printf '%s\n' "$2" | grep -qxF -- "$1"; }
 
-# The OPENCODE_KEY value from ENV_FILE, quotes and surrounding whitespace removed.
+# The value of variable NAME ($1) in ENV_FILE, quotes and surrounding whitespace removed.
 # Prints it to stdout for a pipe into kubectl only; callers never echo it.
-read_key() {
-  local line
-  # grep exits 1 for no match (an empty key, which the caller reports); 2 is an error.
-  line="$(grep -m1 "^$KEY_NAME=" "$ENV_FILE")" || [ "$?" -eq 1 ] || fail "could not read $ENV_FILE"
-  printf '%s' "${line#"$KEY_NAME"=}" | tr -d "[:space:]\"'"
+read_env_value() {
+  local name="$1" line
+  # grep exits 1 for no match (an empty value, which the caller reports); 2 is an error.
+  line="$(grep -m1 "^$name=" "$ENV_FILE")" || [ "$?" -eq 1 ] || fail "could not read $ENV_FILE"
+  printf '%s' "${line#"$name"=}" | tr -d "[:space:]\"'"
 }
+
+# The OPENCODE_KEY value from ENV_FILE (see read_env_value).
+read_key() { read_env_value "$KEY_NAME"; }
 
 # os-arch as the kagent release names its CLI assets, e.g. darwin-arm64.
 os_arch() {

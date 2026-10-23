@@ -1,0 +1,88 @@
+# A tiny MCP server for the requireApproval check: one tool, delete_branch, that deletes
+# nothing and logs every call. Streamable HTTP, JSON answers, no dependencies (node only).
+# The Deployment runs in its own namespace; the RemoteMCPServer must sit beside the
+# AgentTemplate that binds it (kagent), and agent.yaml.tmpl binds it with requireApproval.
+apiVersion: v1
+kind: Namespace
+metadata: {name: demo-mcp}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: demo-mcp, namespace: demo-mcp}
+data:
+  server.mjs: |
+    import { createServer } from "node:http";
+    const log = (event, fields = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), event, ...fields }));
+    const TOOLS = [{
+      name: "delete_branch",
+      description: "Delete a git branch on the remote repository. Destructive.",
+      inputSchema: { type: "object", properties: { branch: { type: "string", description: "The branch to delete" } }, required: ["branch"] },
+    }];
+    function answer(rpc) {
+      switch (rpc.method) {
+        case "initialize":
+          return { protocolVersion: rpc.params?.protocolVersion ?? "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "demo-mcp", version: "1" } };
+        case "tools/list":
+          return { tools: TOOLS };
+        case "tools/call": {
+          const branch = String(rpc.params?.arguments?.branch ?? "");
+          log("tools-call", { tool: rpc.params?.name, branch });
+          return { content: [{ type: "text", text: `deleted branch ${branch} (demo: nothing was deleted)` }], isError: false };
+        }
+        default:
+          return {};
+      }
+    }
+    createServer((req, res) => {
+      if (req.method !== "POST") return res.writeHead(405).end();
+      const chunks = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => {
+        let rpc;
+        try {
+          rpc = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        } catch {
+          return res.writeHead(400).end();
+        }
+        log("rpc", { method: rpc.method });
+        if (rpc.id === undefined) return res.writeHead(202).end();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: answer(rpc) }));
+      });
+    }).listen(8080, () => log("listening", { port: 8080 }));
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: demo-mcp, namespace: demo-mcp}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: demo-mcp}}
+  template:
+    metadata: {labels: {app: demo-mcp}}
+    spec:
+      containers:
+        - name: server
+          # deploy.sh fills in NODE_IMAGE from platform/versions.env (the agent image's base, by digest).
+          image: "@NODE_IMAGE@"
+          command: ["node", "/srv/server.mjs"]
+          ports: [{containerPort: 8080}]
+          volumeMounts: [{name: src, mountPath: /srv}]
+          readinessProbe: {tcpSocket: {port: 8080}, periodSeconds: 2}
+      volumes:
+        - name: src
+          configMap: {name: demo-mcp}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: demo-mcp, namespace: demo-mcp}
+spec:
+  selector: {app: demo-mcp}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata: {name: demo-mcp, namespace: kagent}
+spec:
+  description: Demo MCP server with one destructive-looking tool, for the requireApproval check
+  protocol: STREAMABLE_HTTP
+  url: http://demo-mcp.demo-mcp.svc.cluster.local:8080/mcp

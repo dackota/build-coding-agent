@@ -14,13 +14,83 @@ spec:
     snapshotPolicy:
       location: gs://ate-snapshots/kagent/
 ---
+# The subagents' own models, both through agentgateway like default-model-config:
+# a cheap one to explore, a stronger one to execute.
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata: {name: explorer-model-config, namespace: kagent}
+spec:
+  provider: OpenAI
+  model: glm-5.3-flash
+  openAI:
+    apiFormat: chatCompletions
+    baseUrl: http://agentgateway-proxy.agentgateway-system.svc.cluster.local/v1
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata: {name: executor-model-config, namespace: kagent}
+spec:
+  provider: OpenAI
+  model: glm-5.1
+  openAI:
+    apiFormat: chatCompletions
+    baseUrl: http://agentgateway-proxy.agentgateway-system.svc.cluster.local/v1
+---
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
 metadata: {name: hello-agent, namespace: kagent}
 spec:
   description: Hello TypeScript byo agent
   modelConfig: {name: default-model-config}
-  systemPrompt: You are a concise, helpful assistant. Reply briefly.
+  # The ambiguity rule for ask_user is not here: the agent adds it (agent/src/system-prompt.ts).
+  systemPrompt: |
+    You are a concise coding agent. Reply briefly.
+    Files the user sends are in your workspace. To change code, read the file first, then use
+    edit_file (or write_file for a new file); use search to find where a name is used. Change
+    only what the task asks for. The user gets a diff of your changes, so do not repeat the code.
+    The task tool hands a job to a subagent that shares your workspace: the explorer only reads
+    (cheap), the executor can write. Give each a complete prompt.
+    Git out: you hold no git credential, so never git push. To push a branch and open a pull
+    request on github.com/<owner>/<repo>, call create_branch (from the default branch), then
+    push_files on that branch with the full content of each changed file (read it from the
+    workspace first, path relative to the repo root), then create_pull_request with that branch
+    as head. The user approves each of these calls.
+  tools:
+    # Git out through the in-cluster GitHub MCP server (platform/github-mcp.yaml), which holds
+    # the token. Every call pauses with a tool_approval_request.
+    - mcp:
+        server: {kind: RemoteMCPServer, name: github-mcp}
+        tools: [create_branch, push_files, create_pull_request]
+        requireApproval: true
+    # Every call of delete_branch pauses with a tool_approval_request (platform/demo-mcp.yaml).
+    - mcp:
+        server: {kind: RemoteMCPServer, name: demo-mcp}
+        tools: [delete_branch]
+        requireApproval: true
+    - subAgent:
+        name: explorer
+        description: Read-only helper that finds and reads files and summarizes them. Cheap and fast.
+        templateRef: {name: explorer-template}
+    - subAgent:
+        name: executor
+        description: Does the hard work with full file tools (read, write, edit, search).
+        templateRef: {name: executor-template}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata: {name: explorer-template, namespace: kagent}
+spec:
+  description: Read-only explorer subagent
+  modelConfig: {name: explorer-model-config}
+  systemPrompt: You explore the workspace with read_file and search, and answer with what you found. You cannot change files. Be brief.
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata: {name: executor-template, namespace: kagent}
+spec:
+  description: Executor subagent with full file tools
+  modelConfig: {name: executor-model-config}
+  systemPrompt: You carry out the job you are given with the file tools (read_file, write_file, edit_file, search). Read a file before editing it. Reply with a one-line summary of what you changed.
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
@@ -29,3 +99,5 @@ spec:
   template:
     ref: {name: hello-agent}
   harnessRef: {name: hello-harness}
+  # git over HTTPS and the npm registry, by DNS name (platform/egress.yaml).
+  egressPolicyRefs: [{name: agent-git-egress}]

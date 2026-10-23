@@ -22,8 +22,17 @@ if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
 const { startServer } = await import("./server.ts");
 log("heavy-imports-done");
 try {
-  await startServer({ env: process.env,
+  const { server, shutdown } = await startServer({ env: process.env,
     listener, grpcAddr: GRPC_ADDR, cardJson: process.env.KAGENT_AGENT_CARD_JSON });
+  // A stop signal (pod delete, rollout) ends each sandbox through its beforeStop hook, then the process.
+  const onSignal = () => {
+    void shutdown().finally(() => {
+      server.forceShutdown();
+      process.exit(0);
+    });
+  };
+  process.once("SIGTERM", onSignal);
+  process.once("SIGINT", onSignal);
 } catch (err) {
   log("startup-failed", { message: (err as Error).message });
   process.exit(1);

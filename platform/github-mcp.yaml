@@ -1,0 +1,56 @@
+# The GitHub MCP server for git out: the agent creates a branch, pushes files, and opens a
+# pull request through it. github-mcp-server (http mode, bound to the pod's loopback, only the
+# three tools below) wants a GitHub token on every request; the auth proxy beside it
+# (github-mcp-proxy.mjs, ConfigMap github-mcp-proxy made by deploy.sh) adds it from Secret
+# github-mcp-token (made by deploy.sh from GITHUB_TOKEN in .env). The agent calls the proxy
+# with no credential, so the token lives in this pod only. The RemoteMCPServer has no
+# headers for the same reason: kagent would copy them into the agent's config.
+# agent.yaml.tmpl binds the tools with requireApproval, so each call pauses for the user.
+apiVersion: v1
+kind: Namespace
+metadata: {name: github-mcp}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: github-mcp, namespace: github-mcp}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: github-mcp}}
+  template:
+    metadata: {labels: {app: github-mcp}}
+    spec:
+      containers:
+        - name: server
+          # deploy.sh fills in GITHUB_MCP_IMAGE from platform/versions.env.
+          image: "@GITHUB_MCP_IMAGE@"
+          args: ["http", "--listen-host=127.0.0.1", "--port=8082", "--tools=create_branch,push_files,create_pull_request"]
+        - name: auth-proxy
+          # deploy.sh fills in NODE_IMAGE from platform/versions.env (the agent image's base).
+          image: "@NODE_IMAGE@"
+          command: ["node", "/srv/github-mcp-proxy.mjs"]
+          env:
+            - {name: UPSTREAM_URL, value: "http://127.0.0.1:8082"}
+            - {name: PORT, value: "8080"}
+            - name: GITHUB_TOKEN
+              valueFrom: {secretKeyRef: {name: github-mcp-token, key: token}}
+          ports: [{containerPort: 8080}]
+          volumeMounts: [{name: src, mountPath: /srv}]
+          readinessProbe: {tcpSocket: {port: 8080}, periodSeconds: 2}
+      volumes:
+        - name: src
+          configMap: {name: github-mcp-proxy}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: github-mcp, namespace: github-mcp}
+spec:
+  selector: {app: github-mcp}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata: {name: github-mcp, namespace: kagent}
+spec:
+  description: GitHub through github-mcp-server; the token stays in its pod
+  protocol: STREAMABLE_HTTP
+  url: http://github-mcp.github-mcp.svc.cluster.local:8080/
