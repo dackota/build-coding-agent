@@ -126,3 +126,24 @@ it("fails with the entry index and key names when a subagent has no name or mode
     expect(msg).not.toContain(secret);
   }
 });
+
+const subWith = (extra: Record<string, unknown>) =>
+  JSON.stringify({
+    agent: {
+      model: { model: "m", openai: { base_url: "http://gw/v1" } },
+      sub_agents: [{ name: "explorer", model: { model: "cheap" }, ...extra }],
+    },
+  });
+
+for (const key of ["http_tools", "sse_tools"]) {
+  it(`refuses ${key} on a subagent, naming it`, () => {
+    const json = subWith({ [key]: [{ params: { url: "http://mcp/x" } }] });
+    expect(() => loadConfigFromEnv({ KAGENT_CONFIG_JSON: json })).toThrow(/explorer.*MCP tools on subagents are not supported/);
+  });
+}
+
+it("accepts a subagent with empty or no tool lists", () => {
+  for (const extra of [{}, { http_tools: [], sse_tools: [] }, { http_tools: null }]) {
+    expect(loadConfigFromEnv({ KAGENT_CONFIG_JSON: subWith(extra) }).subAgents.map((s) => s.name)).toEqual(["explorer"]);
+  }
+});

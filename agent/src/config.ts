@@ -43,6 +43,12 @@ function parseSubAgents(raw: unknown, fallbackBaseUrl: string): SubAgentDef[] {
     if (typeof entry?.name !== "string" || entry.name === "" || typeof model !== "string" || model === "") {
       throw new Error(`agent config: agent.sub_agents[${index}] needs a name and model.model; shape ${shape(entry)}`);
     }
+    for (const key of ["http_tools", "sse_tools"] as const) {
+      const tools = (entry as Record<string, unknown>)[key];
+      if (Array.isArray(tools) && tools.length > 0) {
+        throw new Error(`agent config: subagent ${entry.name} has ${key}; MCP tools on subagents are not supported`);
+      }
+    }
     const baseUrl = entry.model?.openai?.base_url;
     defs.push({
       name: entry.name,
