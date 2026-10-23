@@ -1,93 +1,96 @@
 # Agent
 
-A TypeScript `byo` agent for kagent 1.x. Node 24 runs the source directly.
+The coding agent. A TypeScript `byo` image for kagent 1.x. Node 24 runs the `.ts` source
+directly (no build step).
 
-- `src/main.ts`: opens the gRPC port, answers `GET /readyz` on 8081, then imports the rest. `/readyz` is up before any heavy import.
-- `src/server.ts`: A2A over gRPC (`@a2a-js/sdk`). Config comes from `KAGENT_CONFIG_JSON` (what kagent sets) or the file at `KAGENT_CONFIG_PATH`; the card from `KAGENT_AGENT_CARD_JSON`.
-- `src/executor.ts`: an AI SDK `ToolLoopAgent` through the gateway (`@ai-sdk/openai-compatible`, base URL and model from the config), replied as an A2A Task with a `reply` artifact (the model's text) and, when files changed, a `diff` artifact (a unified diff of the turn). Files sent as raw parts with a file name are written to the workspace first, byte for byte (a binary file stays intact). A turn ends after `AGENT_MAX_STEPS` model steps (default 25); the reply then says the step limit was reached. Calling `ask_user` pauses the task in `INPUT_REQUIRED` with an `ask_user_request` (kagent HITL extension, `src/hitl.ts`).
-- `src/shell-tool.ts`: `bash`, a shell command through the `Sandbox`, with a safety gate at execution time. A command runs at once only when every segment starts with a read-only program (`ls`, `cat`, `grep`, `git status`, ...), with no flag that makes it write a file (`git diff --output`, `file -C`), and it has no redirect or `$(...)`; anything else pauses the task in `INPUT_REQUIRED` with a `tool_approval_request` (`src/approval.ts`). The answer is a union: approve (this call), deny with a reason (the model gets the reason as the tool's result), or approve for this session (`scope: "session"` on the approval; the command's risk kinds, such as `rm`, are saved in the session state as `approvedKinds` and later commands of only those kinds run with no pause). The tool's `execute` checks the gate again, so a risky command never runs unapproved.
-- `src/mcp-tools.ts`: the tools of the MCP servers bound in the config (`agent.http_tools`, Streamable HTTP, and `agent.sse_tools`, SSE; what kagent writes for an AgentTemplate's `tools[].mcp`), through `@ai-sdk/mcp`. Each turn opens its own clients and closes them after, so a wake never meets a stale connection; a server that cannot be reached costs its tools for that turn (`mcp-unavailable` in the log), not the turn. `tools` on the binding limits which server tools the model sees. A binding with `require_approval` (`requireApproval: true` on the AgentTemplate) pauses before every call of its tools with a `tool_approval_request`, the same pause and answers as the shell; "approve for this session" approves the tool by name (`mcp:<tool>` in `approvedKinds`). `execute` checks the gate again, so the MCP server never gets an unapproved call. Each call logs `mcp-call`. Built-in tools win a name clash.
-- The system prompt carries the ambiguity rule whenever `ask_user` is a tool: when a task is unclear, do not guess; ask once, with choices when the answer is one of a few options.
-- Tool descriptions follow the course's five-section contract: a summary line, then WHEN TO USE, WHEN NOT TO USE, DO NOT USE FOR, USAGE, EXAMPLES.
-- `src/tool-registry.ts`: the turn's tools come from a registry of named tool factories. The built-ins register once when the executor is made, in the order the system prompt lists them (`read_file`, `write_file`, `edit_file`, `search`, `bash`, `ask_user`, `todo_write`, `load_skill`, `task`); each turn builds them from the turn context (sandbox, change tracker, task id, skills, approval gate, todo holder). The turn's MCP tools come first, and one whose name is registered is dropped. Each tool, MCP tools included, goes through the extensions' `tool_call` wrapper as it is built (see "Writing an extension"). The `task` tool's subagents take the file tools the registry built.
-- `src/system-prompt.ts`: builds the system prompt each turn: the config's instruction, runtime facts (tool names, workspace path, step limit), the verification contract (typecheck, lint, test, build before saying done), then the workspace's `AGENTS.md` rules if the file exists (a missing file is fine; any other read failure fails the turn). The built prompt is logged as `system-prompt`.
-- `src/file-tools.ts`: `read_file`, `write_file`, `edit_file`, `search`, all through a `Sandbox`. `src/workspace-diff.ts` keeps each file's content before its first write in the turn and builds the diff.
-- `src/sandbox.ts`: the `Sandbox` interface (`readFile`, `writeFile`, `exec`, `stop`) and the path check. `src/local-sandbox.ts` works on `$AGENT_DATA_DIR/workspaces/<contextId>/` with Node `fs` and `child_process`; `src/memory-sandbox.ts` (just-bash over a copy-on-write overlay, a dev dependency) is for tests, chosen with `AGENT_SANDBOX=memory`. Both refuse absolute paths, `..` out, and symlinks out. `withHooks` adds lifecycle hooks: `afterStart` (done before first use), `beforeStop` (once, before the first stop, however often `stop` is called), `onTimeout` (after each command the sandbox reports as `hasTimedOut`). The executor logs each as an `afterStart` / `beforeStop` / `onTimeout` event with the `contextId`; on SIGTERM or SIGINT the server stops every sandbox, then exits. Inside a kagent actor no stop signal exists: atelet has only Run, Checkpoint and Restore RPCs, and a suspend is a checkpoint (the process is frozen, not stopped), so `beforeStop` fires on a signal from outside the actor (local run, container stop) and never on suspend. The image has `git`, `node`, and `pnpm` (corepack installs the `packageManager` version at build).
-- Git in: with `bash` as a tool, the system prompt tells the model to `git clone --depth 1 https://github.com/<owner>/<repo>.git` into the workspace (by DNS name, public repos only) and run the project's tests there. A clone and a test run are risky programs, so each pauses for approval. Commands run with `GIT_TERMINAL_PROMPT=0`, so git fails at once on a repo that wants a login. The actor holds no git credential; `platform/egress.yaml` (an `EgressPolicy`, applied by `make deploy`) opens `github.com`, `codeload.github.com` and `registry.npmjs.org` over HTTPS. A command stops after 60 seconds, so pick repos whose install and tests are quick. A stopped command comes back to the model starting with `timed out after 60 seconds`, so it does not retry blind.
-- Git out: the agent never runs `git push`. The AgentTemplate binds the in-cluster GitHub MCP server's `create_branch`, `push_files` and `create_pull_request` (`platform/github-mcp.yaml`) with `requireApproval: true`, and the system prompt tells the model to create a branch, push the changed files' full content to it, and open a pull request with it as head. Each call pauses with a `tool_approval_request`; a denial reaches the model and GitHub gets no call. The token sits in a Secret that only the MCP server's auth proxy reads, so the agent's config, env and logs never hold it.
-- `src/session-state.ts`: the session as one JSON file, `$AGENT_DATA_DIR/sessions/<contextId>/state.json` (default `/data`, an actor snapshot keeps it): the conversation (`messages`), the pending `ask_user` or tool approval pause (`pending`), `todos`, and the risk kinds approved for the session (`approvedKinds`). Saved after every model step and at the end of each turn, temp file then fsync then rename, so a crash never leaves a partial file; a later save removes a temp file a crash left. Every incoming message loads it, so a cold wake continues the conversation and nothing depends on process memory.
-- Implement loop (`src/loop.ts`, `src/loop-commands.ts`, `src/loop-github.ts`, `src/loop-runner.ts`): `/implement https://github.com/<owner>/<repo>/issues/<n>` turns a ready issue into a pull request, driven by code. The executor reads the message before any model call; anything else is an ordinary turn. `loop.ts` is a pure step machine (`next(state, event)` gives the new state and one action: `read`, `ready-check`, `plan`, `signoff`, `commands`, `approve`, `setup`, `build-tests`, `build-code`, `test`, `review`, `pr-branch`, `pr-push`, `pr-open`, `finish`, `park`); an event a step does not expect parks the run. The runner does each action: it reads the issue (title, body, comments) with `issue_read` on the GitHub MCP server, clones the repo into the empty workspace (`AGENT_GIT_BASE_URL`, default `https://github.com`), has the `explorer` subagent answer the ready check as JSON (one retry). A failed ready check goes to the plan step, not to park: the `explorer` writes a one-ticket plan as JSON `{ tooBig, reason, plan }` (what to build, acceptance criteria, seams, proof line); `tooBig` parks the run with "split this issue"; otherwise the loop pauses with an `ask_user_request` showing the plan, choices `approve` and `changes`. Any other answer is changes: a new plan whose explorer prompt holds that text, at most 2 times, and the third changes answer parks (`plan-changes`). The approved plan is saved in the loop state, is searched first for the `Setup:` and `Test:` commands, goes in every executor prompt, and the spec review checks the diff against it; a ready issue skips all this. Then the loop finds the setup and test commands (`AGENTS.md` lines `Setup: \`cmd\`` and `Test: \`cmd\``, else `package.json` and the lockfile; no test command parks the run), and pauses once with a `tool_approval_request` (tool `implement_start`) showing the exact setup command, test command, branch `implement/<n>-<slug>` and repo. On approve it runs setup, then builds test-first with a shared round counter (cap 3): the `executor` writes only the tests (a non-test file written then is a protocol error: the file is removed and the round goes back to the executor), the loop runs the test command and it must be red (green goes back with that fact), the `executor` writes the code, and the test command must be green (red goes back with the capped test output). After a green check the loop reviews on two axes with two fresh calls to the read-only `reviewer` subagent (any name but `executor` gets only `read_file` and `search`): `review-spec` (does the diff do what the issue asks) and `review-standards` (does it follow the repo's `AGENTS.md`). Each prompt carries the issue, the changed files and the diff, and each must return JSON `{ "findings": [{ "severity": "CRITICAL"|"HIGH"|"MEDIUM"|"LOW", "file", "reason" }] }`, checked with a zod schema; invalid output gets one retry with the validation error, then the run parks (`review-invalid`, not continuable). A CRITICAL or HIGH finding goes to the executor as a fix round (back to the code step, then check, then review) and counts against the round cap; MEDIUM and LOW findings are listed in the pull request body. A run parked at the cap lists its open CRITICAL and HIGH findings in its reply. Setup runs again only when the executor changed a lockfile. At the cap the run parks with the reason and the last test output and keeps its workspace and state; `/implement continue [note]` gives it 3 more rounds and puts the note in every later executor prompt, and `/implement stop` drops the run so a new `/implement` can start. Every executor prompt carries the issue, the note, the last findings and the last test output. When the check is green it calls `create_branch`, `push_files` (full content of every file the executor changed) and `create_pull_request` on the MCP server directly, with no approval and no model: the start approval named the branch and repo. The pull request body links the issue, shows the test result and ends with `Closes #<n>`; the final reply is its URL. `issue_read` and these calls are not bound for the model, whose own MCP calls keep `requireApproval`. Loop commands run through `Sandbox.exec(command, { timeoutMs })` with `AGENT_LOOP_TIMEOUT_MS` (default 300000); the model's `bash` keeps 60 s. The loop state is the `loop` field of the session state, saved after every step, so a cold wake goes on from the last step (a pull request already opened is not opened again). Each step logs one `loop-step` line (`taskId`, `step`, `round`, `result`: `ok` or a short code; never test output, file content or issue text) and publishes a WORKING status with a `loop_step` event, which the CLI prints as `> implement <step> (round n): <result>`. A second `/implement` while a run is open or parked is refused; a malformed URL gets a usage message and no model call.
-- `src/controller-task-store.ts`, `src/wire.ts`: the task store. With `runtime.control_plane_url` in the config, tasks live in kagent's controller (`kagent.runtime.v1.TaskStoreService`), called with `Bearer placeholder` (Substrate swaps in the Actor JWT) and the session id from `/run/kagent/identity/name` (`KAGENT_IDENTITY_PATH`). Without it, the SDK's in-memory store.
-- `src/cli.ts`: `pnpm --dir agent run cli -- "message"` (or `make chat MSG=...`) sends one message through the kagent controller (SendStreamingMessage), with the HITL extension header on every call. Text prints as it streams and each tool call prints as `> name {args}` when it starts (the agent publishes both as WORKING status messages with `build-coding-agent/event` metadata). Ctrl-C sends CancelTask for the running task, prints `context=<id>`, and exits 130; the steps that finished stay in the session, so `--context <id> "message"` continues it. A pause prints the question and a `paused: task=... context=... request=...` line; answer it with `pnpm --dir agent run cli -- --task T --context C --request R "answer"`. A tool approval pause prints the command and `paused: task=... context=... approval=...`; decide it with `pnpm --dir agent run cli -- --task T --context C --approval A --approve` (or `--approve-session`, or `--deny "reason"`). A reply prints `context=<id>` on stderr; `pnpm --dir agent run cli -- --context C "message"` continues that session. `--file <path>` (repeatable; `make chat FILE=...`) attaches a file; the CLI prints the reply, then the diff. `AGENT`, `AGENT_NAMESPACE`, `KAGENT_URL` override the defaults. `KAGENT_USER_ID` sets the user the session belongs to (default `cli@build-coding-agent`); set it to `admin@kagent.dev` to see the CLI's sessions, and their pauses, in the kagent UI.
+How the pieces fit: [../docs/how-it-works.md](../docs/how-it-works.md).
+
+## Develop
 
 ```sh
 pnpm --dir agent install --frozen-lockfile
 pnpm --dir agent run typecheck
-pnpm --dir agent test        # seam 1: the agent run with node, a fake config, a scripted model
+pnpm --dir agent test          # no cluster needed: fake config, scripted model
+make deploy                    # run your change on the cluster
 ```
 
-Findings on kagent 1.0.0-alpha17 that shape the code:
+Tests run the real agent with Node against a fake kagent controller, a fake MCP server, and a
+scripted model. `AGENT_SANDBOX=memory` swaps the workspace for an in-memory one.
 
-- Deviation from the contract (`127.0.0.1:80`): the gRPC server binds all interfaces (`0.0.0.0:80`). Retested live with `KAGENT_GRPC_ADDR=127.0.0.1:80` set on the Harness: every message failed, and the atenet-router logged `grpc.status=14 error="upstream call failed: Connect: tunnel failed"` about 0.85 s after resume, while the agent's log showed `grpc-listening addr 127.0.0.1:80`. With `0.0.0.0:80` the same message returned `42`.
-- The router dials the gRPC port as soon as `/readyz` answers, so the port is opened (by `src/early-listener.ts`, node:net only) before `/readyz` and holds connections until the real server is ready.
-- kagent keeps its own record of every Task (`kagent.runtime.v1.TaskStoreService`). The call must go to `runtime.control_plane_url` with `Bearer placeholder`: the actor's egress policy swaps in an Actor JWT for that host only. Elsewhere the controller answers "runtime actor identity is required" (the S2 failure). Settle only real boundaries (terminal, or a move into a waiting state), or the controller refuses with "task changed". See `docs/decisions/0001-ts-or-go.md`.
-- Subagent templates bound with `tools[].subAgent.templateRef` arrive in `KAGENT_CONFIG_JSON` under `agent.sub_agents`; the agent logs their names and key names at startup (`config-received`).
+## Code map
 
-Subagents (`src/subagents.ts`): each entry of `agent.sub_agents` (name, description, instruction, model) becomes an in-process `ToolLoopAgent` behind the main agent's `task` tool (`agent`, `prompt`). The template carries no tool list, so the role comes from the name: `executor` gets all file tools; any other name (the `explorer`) gets only `read_file` and `search`, so a write attempt comes back to it as an unavailable-tool error. Subagents run on the main agent's sandbox (the same workspace and the same diff), reuse its output cap and `step-usage` log (with an `agent` field), and log one `subagent-call` line (`agent`, `model`) per call. They get no `task` tool: nesting is one level. Their file tools are the ones the main agent's registry built this turn, so extension events hold for subagent tool calls too: a `protect-env` block stops the executor subagent's `write_file .env` as it stops the main agent's, and `redact-env` hides `.env` values from a subagent's `read_file` and `search` as from the main agent's. A subagent's model base URL falls back to the main agent's.
+Start-up and transport:
 
-Skills: a `skills/<name>/SKILL.md` in the workspace (frontmatter `name`, `description`) is listed by name and description in the system prompt. Its body loads only when the model calls `load_skill`. (kagent does not pass skill content to a byo image through its config, so the workspace is the source.)
+| File | Job |
+|---|---|
+| `src/main.ts` | Entry point. Opens the gRPC port and `/readyz` first, then loads the rest. |
+| `src/early-listener.ts`, `src/readyz.ts` | Hold connections and answer `/readyz` before the heavy imports finish. |
+| `src/server.ts` | A2A over gRPC. Reads config and env, builds the executor. |
+| `src/config.ts` | Parses kagent's config (`KAGENT_CONFIG_JSON`). |
+| `src/controller-task-store.ts`, `src/wire.ts` | Saves tasks to kagent's controller. Hand-written protobuf codecs. |
+| `src/hitl.ts` | kagent's human-in-the-loop extension: the pause and the answer. |
 
-Context management (`src/context.ts`):
+One turn:
 
-- Every tool's result, and every tool error message, is cut to `AGENT_MAX_TOOL_OUTPUT_CHARS` characters (default 20000), marker included. A cut result ends with `[truncated]`.
-- Tool results before the latest turn (the last user message and everything after it) are replaced with `[old tool result pruned]` in what the model sees. The saved session keeps the full results.
-- Each model step logs one `step-usage` line: `step`, `inputTokens`, `outputTokens`, `cachedTokens` (0 when the gateway reports none).
+| File | Job |
+|---|---|
+| `src/executor.ts` | Runs one turn: load session, build prompt and tools, run the model, reply. |
+| `src/system-prompt.ts` | Builds the system prompt: instruction, tool list, rules, the workspace's `AGENTS.md`. |
+| `src/session-state.ts` | The session as one JSON file. Saved after every step, crash-safe. |
+| `src/context.ts` | Output cap and pruning of old tool results. |
+| `src/gateway.ts` | The model client, through agentgateway. |
+| `src/stream-events.ts` | Progress events the CLI prints while a turn runs. |
+| `src/approval.ts` | The tool approval pause and its three answers. |
 
-Prompt caching decision: not requested by the agent, because the provider does it by itself. The agent sends no `cache_control` markers. The OpenCode Go plan (model `glm-5.3-flash`) caches repeated prompt prefixes on its own and reports them as `usage.prompt_tokens_details.cached_tokens`; agentgateway passes that field through unchanged, and `@ai-sdk/openai-compatible` maps it to the `cachedTokens` in the `step-usage` line. Evidence on kind: a 15680-token prompt sent through the gateway twice more returned `usage.prompt_tokens_details.cached_tokens: 12160` both times (a first send of it, not saved, returned 0). Responses: `.scratch/s2-spike/verify/9-r2/gateway-response-1.json` and `gateway-response-2.json`. The short prefixes of the agent's own turns (about 1300 tokens) showed `cachedTokens: 0` in the live runs; a longer session should show hits in the log.
+Tools:
 
-## Writing an extension
+| File | Job |
+|---|---|
+| `src/tool-registry.ts` | Builds each turn's tools in a fixed order and wraps them with extension events. |
+| `src/file-tools.ts` | `read_file`, `write_file`, `edit_file`, `search`. |
+| `src/workspace-diff.ts` | Remembers each file before its first write and builds the turn's diff. |
+| `src/shell-tool.ts` | `bash` and its read-only allow list. |
+| `src/mcp-tools.ts` | Tools from bound MCP servers. New clients each turn. |
+| `src/todo-tool.ts` | `todo_write`. |
+| `src/skills.ts` | Finds `skills/*/SKILL.md` and serves `load_skill`. |
+| `src/subagents.ts` | The `task` tool and the in-process subagents. |
+| `src/extensions.ts` | Loads `extensions/*.ts`. See [../docs/extensions.md](../docs/extensions.md). |
 
-An extension is a TypeScript module in the extensions directory (`AGENT_EXTENSIONS_DIR`; default the `extensions` directory beside `src`, `/app/extensions` in the image). At startup the agent loads each `.ts` file there, sorted by file name, and calls its default export with the extension API. Extensions are trusted operator code: they load only from the image, never from the workspace. Startup stops, naming the file or directory, when a tool name is already taken (by another extension or by any built-in, `load_skill` and `task` included even on turns that do not build them), a module has no default function, setup throws, `AGENT_EXTENSIONS_DIR` is missing, or it is under `AGENT_DATA_DIR`.
+Workspace:
 
-```ts
-import { tool } from "ai";
-import { z } from "zod";
-import type { ExtensionApi } from "../src/extensions.ts";
+| File | Job |
+|---|---|
+| `src/sandbox.ts` | The `Sandbox` interface (`readFile`, `writeFile`, `exec`, `stop`), path checks, lifecycle hooks. |
+| `src/local-sandbox.ts` | The real one: `$AGENT_DATA_DIR/workspaces/<contextId>/` with Node `fs` and `child_process`. |
+| `src/memory-sandbox.ts` | An in-memory one for tests (just-bash). |
 
-export default function (api: ExtensionApi): void {
-  api.registerTool("now", (ctx) => // ctx.sandbox is the turn's Sandbox
-    tool({ description: "Current UTC time.", inputSchema: z.object({}), execute: async () => new Date().toISOString() }));
-}
-```
+Implement loop: `src/loop*.ts`. See [../docs/implement-loop.md](../docs/implement-loop.md).
 
-`registerTool(name, factory)` adds the tool after the built-ins, so the system prompt's `- Tools:` line lists it last. An MCP tool with the same name is dropped for the turn. The log has one `extension-loaded` line per extension (file name, tool names, and `events` naming the lifecycle events it subscribes to, such as `tool_call,tool_result`). The image ships `extensions/now.ts`, a `now` tool that returns the current UTC time in ISO 8601. Use `import type` for anything from `../src/` (Node strips types, so a plain import of a type-only name fails at load), with one allowed value import: `import { log } from "../src/log.ts"`, the agent's one-JSON-line logger, so an extension's lines land in the same log as the agent's. Pass it names and counts only, never tool input or output.
+CLI: `src/cli.ts` and `src/a2a-client.ts`. See [../docs/using-the-agent.md](../docs/using-the-agent.md).
 
-`ctx.call(name, input)` runs a built-in tool from inside a custom tool and returns its output (`await ctx.call("read_file", { path })`). Each inner call gets the call id `<outer call id>:call-<n>`, so the shell's approval gate treats it as its own call: a risky `bash` command is refused, never run. `call` throws a clear error, which the model sees, for a custom tool, an MCP tool, `ask_user` (it pauses the turn), a built-in not built this turn (`load_skill` with no skills, `task` with no subagents) and an unknown name. `todo_write` is allowed and writes the turn's todo list. The image ships `extensions/read-files.ts`, a `read_files` tool that takes a list of paths and returns each file's text under its path, built by calling `read_file` once per path; a path outside the workspace shows its error in the result, not as a crash of the tool.
+Other: `src/log.ts` writes one JSON line per event. Never pass it config, env, or request bodies.
 
-`api.on("tool_call", handler)` subscribes to the `tool_call` lifecycle event. Before any tool with an `execute` runs (MCP, built-in, custom, an inner `ctx.call`, and a subagent's file tools), every extension's handlers run in load order with `{ toolName, input }`:
+## Settings
 
-```ts
-api.on("tool_call", async ({ toolName, input }) => {
-  if (toolName === "write_file" && (input as { path: string }).path === "x.txt") return { block: true, reason: "x.txt is off limits" };
-  // return nothing to let the call go on
-});
-```
+Set these on the Harness (`platform/agent.yaml.tmpl`, `spec.workload`) or in tests.
 
-- Return nothing to watch: the call goes on.
-- Return `{ modify: { input } }` to change the input: later handlers and the tool see the new input. It is checked again against the tool's input schema; an input the schema refuses is the tool error `extension <name> gave <tool> an invalid input: <field>: <problem>`, and the tool does not run. The `extension-failed` log line names only each field and the problem's code (`todos.0.status: invalid_enum_value`), never the value. An MCP tool's schema is a plain JSON Schema with no validator here, so a modified MCP input is passed on unchecked; the MCP server checks it.
-- Return `{ block: true, reason }` to block: the chain ends, the tool does not run, and the model (or the subagent's model) gets `blocked by <extension>: <reason>` as the tool's result. The log has `extension-blocked` (`tool`, `extension`).
-- A handler that throws, or returns anything else, ends the chain and fails the call closed: the tool does not run and the model gets the tool error `extension <name> failed on tool_call`. The log has `extension-failed` (`lifecycleEvent`, `extension`, `message`).
+| Variable | Default | What it sets |
+|---|---|---|
+| `AGENT_MAX_STEPS` | `25` | Model steps per turn. At the limit the reply says so. |
+| `AGENT_MAX_TOOL_OUTPUT_CHARS` | `20000` | Cap on each tool result. A cut result ends with `[truncated]`. |
+| `AGENT_LOOP_TIMEOUT_MS` | `300000` | Timeout for the implement loop's setup and test commands. (`bash` is fixed at 60 s.) |
+| `AGENT_GIT_BASE_URL` | `https://github.com` | Where the implement loop clones from. |
+| `AGENT_DATA_DIR` | `/data` | Sessions and workspaces. The actor snapshot keeps it. |
+| `AGENT_EXTENSIONS_DIR` | `extensions/` beside `src/` (`/app/extensions` in the image) | Where extensions load from. |
+| `AGENT_SANDBOX` | `local` | `memory` for tests. |
+| `KAGENT_GRPC_ADDR` | `0.0.0.0:${KAGENT_PORT:-80}` | gRPC bind address. Keep `0.0.0.0`. |
+| `KAGENT_READYZ_PORT` | `8081` | `/readyz` port. |
 
-So the first handler that blocks or throws decides; a modify passes on. `<extension>` is the file name without `.ts`. An approval pause (`bash`'s risky commands, MCP tools on a `requireApproval` binding) comes first: the handlers see the call once, when it is about to run after the approval. The output cap applies to a block reason and a handler error like any tool output. Log lines never carry tool input. `ask_user` has no `execute`, so no event fires for it.
+kagent sets `KAGENT_CONFIG_JSON` and `KAGENT_AGENT_CARD_JSON`. Outside kagent, point
+`KAGENT_CONFIG_PATH` at a config file instead.
 
-The image ships two `tool_call` extensions: `extensions/audit.ts` logs a `tool-call` line with the tool name for every call, and `extensions/protect-env.ts` blocks `write_file` and `edit_file` on a `.env` or `.env.*` file at any depth. `protect-env` covers the file tools only: a `bash` command that writes `.env` is a risky command, so it pauses for approval, and once approved it is not blocked.
+## The image
 
-`api.on("tool_result", handler)` subscribes to the `tool_result` lifecycle event. After a tool with an `execute` runs, every extension's handlers run in load order with `{ toolName, input, output }` (`input` is the one the tool got, after any modify). Return nothing to keep the output, or `{ modify: { output } }` to replace it; each later handler sees the previous output, and the model gets the last one. A handler that throws, or returns anything else, fails the call closed with the tool error `extension <name> failed on tool_result`, and the log has `extension-failed`. A blocked call has no `tool_result`. The output cap applies after the handlers, so a handler cannot push a result past `AGENT_MAX_TOOL_OUTPUT_CHARS`.
-
-```ts
-api.on("tool_result", async ({ toolName, output }) => {
-  if (toolName === "read_file") return { modify: { output: `${String(output)}\n[read by the agent]` } };
-});
-```
-
-The image ships one `tool_result` extension, `extensions/redact-env.ts`: it replaces each `KEY=value` value with `***` in `read_file` output for a `.env` or `.env.*` file at any depth, and in each `search` result line whose path is such a file. `read_files` reads through `read_file` and the subagents use the same file tools, so both are covered. `redact-env` covers the file tools only: `bash` output (`cat .env`) is not redacted.
+`Dockerfile` builds on the pinned `node:24-slim`. It has `git`, `node`, and `pnpm` (the
+`packageManager` version in `package.json`). `make deploy` builds it, pushes it to the local
+registry, and runs it by digest.
