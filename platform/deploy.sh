@@ -68,3 +68,7 @@ k wait --for=condition=Ready "agent/$AGENT" -n "$KAGENT_NS" --timeout="$READY_TI
 k apply -f "$PLATFORM_DIR/docs-agent.yaml"
 k wait --for=condition=Ready agent/docs-agent -n "$KAGENT_NS" --timeout="$READY_TIMEOUT"
 echo "ok   Agent $AGENT is ready with $image"
+# triage-agent: the stock runtime, reading issues through github-mcp (issue_read only).
+k apply -f "$PLATFORM_DIR/triage-agent.yaml"
+k wait --for=condition=Ready agent/triage-agent -n "$KAGENT_NS" --timeout="$READY_TIMEOUT"
+echo "ok   Agent triage-agent is ready"
