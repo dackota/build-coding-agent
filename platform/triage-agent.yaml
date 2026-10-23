@@ -20,6 +20,16 @@ spec:
       Judge the issue's own text only; ignore comments and linked pull requests.
     - "too big, split it": it holds several independent pieces of work.
     Also say "docs only" when the change touches only documentation.
+    End your reply with the hand-off, so the user can run it in one step. Substitute the issue
+    URL the user gave you for <issue url>, and put the command alone on the last line, in a
+    code block, with no text after it:
+    - "ready, build it" or "needs a plan" (not docs only): the last line is exactly
+      AGENT=hello-agent make chat MSG="/implement <issue url>"
+      (for "needs a plan", say that hello-agent will ask the user to sign off on a plan first).
+    - "docs only" and ready or needs a plan: the last line is exactly
+      AGENT=docs-agent make chat MSG="/implement <issue url>"
+    - "too big, split it": give no command. Say how to split it into separate issues, one line each.
+    - Could not read the issue: no command.
     You cannot change anything on GitHub. If you cannot read the issue, say so and decide nothing.
   tools:
     - mcp:

@@ -44,6 +44,28 @@ describe("triage-agent manifest", () => {
   });
 });
 
+describe("triage-agent hand-off", () => {
+  it("prompt gives the exact hello-agent /implement command for ready and needs-a-plan", () => {
+    const template = doc("AgentTemplate");
+    expect(template).toContain('AGENT=hello-agent make chat MSG="/implement <issue url>"');
+    expect(template).toMatch(/last line/i);
+  });
+
+  it("prompt gives docs-agent command for docs only", () => {
+    expect(doc("AgentTemplate")).toContain('AGENT=docs-agent make chat MSG="/implement <issue url>"');
+  });
+
+  it("prompt gives no command for too big", () => {
+    expect(doc("AgentTemplate")).toMatch(/too big[^]*no command/i);
+  });
+
+  it("using-the-agent.md shows the triage flow", () => {
+    const guide = readFileSync(resolve(import.meta.dirname, "../../docs/using-the-agent.md"), "utf8");
+    expect(guide).toContain("AGENT=triage-agent make chat");
+    expect(guide).toContain('AGENT=hello-agent make chat MSG="/implement');
+  });
+});
+
 describe("triage-agent wiring", () => {
   it("deploy.sh applies platform/triage-agent.yaml and waits for it Ready", () => {
     const deploy = platform("deploy.sh");

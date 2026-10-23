@@ -85,6 +85,27 @@ stops after 60 s.
 
 **Whole issue to PR.** Use `/implement`. See [implement-loop.md](implement-loop.md).
 
+## Triage an issue first
+
+`triage-agent` reads an issue and tells you what to do with it. Give it the issue URL:
+
+```sh
+AGENT=triage-agent make chat MSG="https://github.com/<owner>/<repo>/issues/<n>"
+```
+
+It replies "ready, build it", "needs a plan", or "too big, split it", says why, and ends
+with the command to run next:
+
+```sh
+AGENT=hello-agent make chat MSG="/implement https://github.com/<owner>/<repo>/issues/<n>"
+```
+
+A docs-only issue gets `AGENT=docs-agent make chat MSG="/implement <url>"` instead. A
+too-big issue gets no command, only how to split it. Triage cannot call another agent on
+alpha17 (see [ADR 0003](decisions/0003-a2a-and-stock-runtime.md)), so you run the command
+yourself. That also means every pause (start approval, plan sign-off) comes straight from
+the agent that pauses, and you answer it as above.
+
 ## See your sessions in the kagent UI
 
 Sessions belong to a user id. The CLI uses `cli@build-coding-agent` by default. The UI signs
