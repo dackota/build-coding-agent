@@ -47,6 +47,14 @@ Talk to it: `AGENT=my-helper make chat MSG="hello"`.
 Pick this when the agent only needs a prompt and MCP tools. It does not get our file tools,
 `bash`, approvals on shell commands, or the implement loop.
 
+**MCP tools work here with no code** (tested, see [ADR 0003](decisions/0003-a2a-and-stock-runtime.md)).
+Add a binding from Recipe 3 to the template. A stock agent with `github-mcp` and
+`tools: [issue_read]` read an issue's exact title. It needs no `EgressPolicy` to reach
+in-cluster servers.
+
+**Subagents work here too** (tested). Add a `subAgent` with a `templateRef` (Recipe 6). The
+stock agent handed text to the subagent and returned its reply.
+
 ## Recipe 2: a new agent on our image
 
 **Tested:** no. We have run only one Agent on `hello-harness`.
@@ -82,7 +90,7 @@ Apply it after `make deploy` (which creates `hello-harness`). The agent adds its
 
 ## Recipe 3: reuse an existing MCP server
 
-**Tested:** yes, for our byo agent (`github-mcp` and `demo-mcp` on `hello-agent`).
+**Tested:** yes, for our byo agent (`github-mcp` and `demo-mcp` on `hello-agent`) and for the stock runtime (`issue_read`).
 
 A `RemoteMCPServer` is defined once. Any template can bind it. List only the tools the
 agent needs:
@@ -148,7 +156,7 @@ provider needs a new backend and route in `platform/gateway.yaml` first.
 
 ## Recipe 6: a new subagent
 
-**Tested:** yes, for our byo agent.
+**Tested:** yes, for our byo agent and for the stock runtime.
 
 Write a template for it (its own prompt and model), then bind it:
 
@@ -205,9 +213,9 @@ handles it. Our `agent/` already does:
 - **Skills:** kagent does not pass them at all. Our agent reads `skills/` from the workspace.
 - **Human-in-the-loop:** the image must send kagent's HITL pause and read the answer.
 
-## Not tried here
+## Does not work on alpha17
 
-- One agent calling another agent over A2A.
-- MCP tools and subagents on the stock runtime.
-
-For these, read the [kagent docs](https://kagent.dev/docs) and test on the cluster first.
+- **One agent calling another agent over A2A.** Does not work on alpha17: `AgentTemplate`
+  has no agent-as-tool field, and an agent's actor may not call `invoke_session` on another
+  session. Have one agent tell the user which agent and command to run instead. Details and
+  what to retest on a new kagent: [ADR 0003](decisions/0003-a2a-and-stock-runtime.md).
