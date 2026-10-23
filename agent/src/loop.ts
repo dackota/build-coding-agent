@@ -4,7 +4,7 @@
 // repeated and no sequence of events can throw.
 import { z } from "zod";
 
-export const STEPS = ["read", "ready-check", "commands", "approve", "setup", "build", "check", "pr", "done", "parked"] as const;
+export const STEPS = ["read", "ready-check", "commands", "approve", "setup", "build-tests", "check-red", "build-code", "check-green", "pr", "done", "parked", "stopped"] as const;
 export type Step = (typeof STEPS)[number];
 
 export type Target = { owner: string; repo: string; number: number };
@@ -13,14 +13,25 @@ export type Issue = { title: string; body: string; comments: string[] };
 const MAX_OUTPUT_CHARS = 4000;
 const MAX_SLUG_CHARS = 40;
 const MAX_BRANCH_FILES = 200;
+/** Build, check and review share one round counter with this cap; `continue` adds this many rounds. */
+export const ROUND_CAP = 3;
 
 const targetSchema = z.object({ owner: z.string(), repo: z.string(), number: z.number().int() });
 const issueSchema = z.object({ title: z.string(), body: z.string(), comments: z.array(z.string()) });
 
 export const loopStateSchema = z.object({
   step: z.enum(STEPS),
-  /** Build, check and review share this counter (the cap is ticket 02). */
+  /** Build and check share this counter, 1-based, never past `cap`. */
   round: z.number().int(),
+  cap: z.number().int().default(ROUND_CAP),
+  /** What the next executor prompt must say: why the last step went back. */
+  feedback: z.string().optional(),
+  /** The user's note from `/implement continue <note>`, for every executor prompt after it. */
+  note: z.string().optional(),
+  /** Where a parked run goes on from on `continue`; absent when it cannot continue. */
+  resume: z.enum(["build-tests", "build-code"]).optional(),
+  /** Where the run goes after the setup it is in (setup runs again when a lockfile changed). */
+  afterSetup: z.enum(["check-green"]).optional(),
   target: targetSchema,
   issue: issueSchema.optional(),
   baseBranch: z.string().optional(),
@@ -51,6 +62,8 @@ export type LoopEvent =
   | { type: "branched" }
   | { type: "pushed" }
   | { type: "opened"; url: string }
+  | { type: "continue"; note?: string | undefined }
+  | { type: "stop" }
   | { type: "failed"; code: string; reason: string };
 
 export type Action =
@@ -59,7 +72,8 @@ export type Action =
   | { kind: "commands" }
   | { kind: "approve"; setup: string | undefined; test: string; branch: string; repo: string }
   | { kind: "setup" }
-  | { kind: "build" }
+  | { kind: "build-tests" }
+  | { kind: "build-code" }
   | { kind: "test" }
   | { kind: "pr-branch" }
   | { kind: "pr-push" }
@@ -73,12 +87,20 @@ export type Next = { state: LoopState; action: Action };
 const ISSUE_URL = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/issues\/(\d{1,9})\/?$/;
 const USAGE = "usage: /implement https://github.com/<owner>/<repo>/issues/<n>";
 
-export type ImplementCommand = { kind: "none" } | { kind: "start"; target: Target } | { kind: "invalid"; message: string };
+export type ImplementCommand =
+  | { kind: "none" }
+  | { kind: "start"; target: Target }
+  | { kind: "continue"; note?: string }
+  | { kind: "stop" }
+  | { kind: "invalid"; message: string };
 
-/** What a message asks of the loop: nothing (an ordinary turn), a run on an issue, or a usage error. */
+/** What a message asks of the loop: nothing (an ordinary turn), a run on an issue, continue, stop, or a usage error. */
 export function parseImplementCommand(text: string): ImplementCommand {
   const match = /^\s*\/implement(?:\s+(.*?))?\s*$/s.exec(text);
   if (!match) return { kind: "none" };
+  if (match[1] === "stop") return { kind: "stop" };
+  const resume = /^continue(?:\s+(.*))?$/s.exec(match[1] ?? "");
+  if (resume) return resume[1] ? { kind: "continue", note: resume[1] } : { kind: "continue" };
   const url = ISSUE_URL.exec(match[1] ?? "");
   const isDotName = (name: string | undefined) => name === "." || name === "..";
   if (!url || isDotName(url[1]) || isDotName(url[2])) return { kind: "invalid", message: `Cannot start: ${USAGE}` };
@@ -96,6 +118,22 @@ export function branchName(number: number, title: string): string {
   return `implement/${number}-${slug || "issue"}`;
 }
 
+const TEST_DIRS = new Set(["test", "tests", "__tests__"]);
+const LOCKFILES = new Set(["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "go.sum", "Cargo.lock", "poetry.lock", "uv.lock", "Gemfile.lock", "composer.lock"]);
+
+/** A test file by its path: under test/, tests/ or __tests__/, or named *.test.*, *.spec.*, *_test.* or test_*.py. */
+export function isTestFile(path: string): boolean {
+  const parts = path.split("/");
+  const name = parts.at(-1) ?? "";
+  return parts.slice(0, -1).some((dir) => TEST_DIRS.has(dir)) || /\.(test|spec)\.[^.]+$/.test(name) || /_test\.[^.]+$/.test(name) || /^test_.+\.py$/.test(name);
+}
+
+/** A dependency lockfile by its name. */
+export const isLockfile = (path: string): boolean => LOCKFILES.has(path.split("/").at(-1) ?? "");
+
+/** A parked run that stopped in the build or check can go on with more rounds. */
+export const canContinue = (state: LoopState): boolean => state.step === "parked" && state.resume !== undefined;
+
 const capped = (text: string): string => (text.length > MAX_OUTPUT_CHARS ? text.slice(-MAX_OUTPUT_CHARS) : text);
 
 /** The action a state is waiting on. Saved and loaded, a state gives the same action. */
@@ -107,11 +145,14 @@ export function actionFor(state: LoopState): Action {
     case "approve":
       return { kind: "approve", setup: state.commands?.setup, test: state.commands?.test ?? "", branch: state.branch ?? "", repo: `${state.target.owner}/${state.target.repo}` };
     case "setup": return { kind: "setup" };
-    case "build": return { kind: "build" };
-    case "check": return { kind: "test" };
+    case "build-tests": return { kind: "build-tests" };
+    case "build-code": return { kind: "build-code" };
+    case "check-red":
+    case "check-green": return { kind: "test" };
     case "pr": return { kind: (["pr-branch", "pr-push", "pr-open"] as const)[Math.min(state.prStage, 2)]! };
     case "done": return { kind: "finish" };
     case "parked": return { kind: "park" };
+    case "stopped": return { kind: "noop" };
   }
 }
 
@@ -121,22 +162,66 @@ const park = (state: LoopState, code: string, reason: string): Next => result({ 
 
 /** A run on `target`, at its first step. */
 export function begin(target: Target): Next {
-  return result({ step: "read", round: 1, target, prStage: 0 });
+  return result({ step: "read", round: 1, cap: ROUND_CAP, target, prStage: 0 });
 }
 
-/** True while a run is still going: not finished, not parked. */
-export const isOpen = (state: LoopState | undefined): boolean => state !== undefined && state.step !== "done" && state.step !== "parked";
+/** True while a run is still going: not finished, parked or stopped. */
+export const isOpen = (state: LoopState | undefined): boolean => state !== undefined && !["done", "parked", "stopped"].includes(state.step);
+
+/** True while a run holds the session: going or parked. A new run starts only when this is false. */
+export const isHeld = (state: LoopState | undefined): boolean => isOpen(state) || state?.step === "parked";
+
+const TOO_EARLY = "Your tests passed before any code was written, so they test nothing new. Write a test that will fail for the right reason.";
+const STILL_RED = "The tests still fail after your code. Fix the code so they pass.";
+
+/** The next round at `step`, or a park that `continue` can resume when the round cap is reached. */
+function nextRound(state: LoopState, step: "build-tests" | "build-code", patch: Partial<LoopState>, why: string): Next {
+  if (state.round >= state.cap) return result({ ...state, ...patch, step: "parked", code: "rounds", reason: `stopped after ${state.cap} rounds: ${why}`, resume: step });
+  return move(state, step, { ...patch, round: state.round + 1 });
+}
 
 function afterCheck(state: LoopState, event: Extract<LoopEvent, { type: "tested" }>): Next {
   const output = capped(event.output);
   if (event.timedOut) return park(state, "timeout", "the test command timed out");
-  if (!event.green) return park({ ...state, testGreen: false, testOutput: output }, "red", `the tests failed:\n${output}`);
-  return move(state, "pr", { testGreen: true, testOutput: output, prStage: 0 });
+  if (state.step === "check-red") {
+    if (!event.green) return move(state, "build-code", { testGreen: false, testOutput: output, feedback: undefined });
+    return nextRound(state, "build-tests", { testGreen: true, testOutput: output, feedback: TOO_EARLY }, "the tests passed before any code was written");
+  }
+  if (event.green) return move(state, "pr", { testGreen: true, testOutput: output, prStage: 0, feedback: undefined });
+  return nextRound(state, "build-code", { testGreen: false, testOutput: output, feedback: STILL_RED }, "the tests still fail");
+}
+
+const union = (a: readonly string[] | undefined, b: readonly string[]): string[] => [...new Set([...(a ?? []), ...b])].sort().slice(0, MAX_BRANCH_FILES);
+
+/** The executor wrote the tests: only test files are allowed, else the round is a protocol error. */
+function afterTestsWritten(state: LoopState, event: Extract<LoopEvent, { type: "built" }>): Next {
+  if (!event.ok) return park(state, "build-failed", "the executor step failed");
+  const others = event.files.filter((f) => !isTestFile(f));
+  if (event.files.length === 0 || others.length > 0) {
+    const feedback = others.length > 0
+      ? `Protocol error: this step may write only test files, but you also wrote ${others.join(", ")}. Those files were removed. Write only the tests.`
+      : "Protocol error: you wrote no test file. Write the tests.";
+    return nextRound(state, "build-tests", { feedback }, "the executor did not write only tests");
+  }
+  return move(state, "check-red", { changedFiles: union(state.changedFiles, event.files), testGreen: undefined, feedback: undefined });
+}
+
+/** The executor wrote the code: setup runs again first when a lockfile changed and a setup command was approved. */
+function afterCodeWritten(state: LoopState, event: Extract<LoopEvent, { type: "built" }>): Next {
+  if (!event.ok) return park(state, "build-failed", "the executor step failed");
+  const patch = { changedFiles: union(state.changedFiles, event.files), testGreen: undefined, feedback: undefined };
+  if (state.commands?.setup && event.files.some(isLockfile)) return move(state, "setup", { ...patch, afterSetup: "check-green" });
+  return move(state, "check-green", patch);
+}
+
+function afterContinue(state: LoopState, event: Extract<LoopEvent, { type: "continue" }>): Next {
+  if (!state.resume) return result(state);
+  return move(state, state.resume, { round: state.round + 1, cap: state.cap + ROUND_CAP, note: event.note ?? state.note, resume: undefined, code: undefined, reason: undefined });
 }
 
 function afterApproval(state: LoopState, event: Extract<LoopEvent, { type: "approval" }>): Next {
   if (!event.approved) return park(state, "denied", `the start approval was denied${event.reason ? `: ${event.reason}` : "."}`);
-  return state.commands?.setup ? move(state, "setup") : move(state, "build");
+  return state.commands?.setup ? move(state, "setup") : move(state, "build-tests");
 }
 
 function afterCommands(state: LoopState, event: Extract<LoopEvent, { type: "commands" }>): Next {
@@ -147,7 +232,9 @@ function afterCommands(state: LoopState, event: Extract<LoopEvent, { type: "comm
 
 /** The next state and action for an event. An event the step does not expect, or a runner failure, parks the run. */
 export function next(state: LoopState, event: LoopEvent): Next {
-  if (state.step === "done" || state.step === "parked") return result(state);
+  if (event.type === "stop") return state.step === "done" ? result(state) : move(state, "stopped");
+  if (state.step === "parked") return event.type === "continue" ? afterContinue(state, event) : result(state);
+  if (state.step === "done" || state.step === "stopped") return result(state);
   if (event.type === "failed") return park(state, event.code, event.reason);
   if (state.step === "read" && event.type === "read") return move(state, "ready-check", { issue: event.issue, baseBranch: event.baseBranch });
   if (state.step === "ready-check" && event.type === "ready") {
@@ -157,13 +244,11 @@ export function next(state: LoopState, event: LoopEvent): Next {
   if (state.step === "approve" && event.type === "approval") return afterApproval(state, event);
   if (state.step === "setup" && event.type === "setup") {
     if (event.timedOut) return park(state, "timeout", "the setup command timed out");
-    return event.ok ? move(state, "build") : park(state, "setup-failed", `the setup command failed:\n${capped(event.output)}`);
+    return event.ok ? move(state, state.afterSetup ?? "build-tests", { afterSetup: undefined }) : park(state, "setup-failed", `the setup command failed:\n${capped(event.output)}`);
   }
-  if (state.step === "build" && event.type === "built") {
-    if (!event.ok || event.files.length === 0) return park(state, "build-failed", "the executor changed no files");
-    return move(state, "check", { changedFiles: event.files.slice(0, MAX_BRANCH_FILES), testGreen: undefined });
-  }
-  if (state.step === "check" && event.type === "tested") return afterCheck(state, event);
+  if (state.step === "build-tests" && event.type === "built") return afterTestsWritten(state, event);
+  if (state.step === "build-code" && event.type === "built") return afterCodeWritten(state, event);
+  if ((state.step === "check-red" || state.step === "check-green") && event.type === "tested") return afterCheck(state, event);
   if (state.step === "pr" && state.prStage === 0 && event.type === "branched") return move(state, "pr", { prStage: 1 });
   if (state.step === "pr" && state.prStage === 1 && event.type === "pushed") return move(state, "pr", { prStage: 2 });
   if (state.step === "pr" && state.prStage >= 2 && event.type === "opened") return move(state, "done", { prUrl: event.url });

@@ -51,5 +51,9 @@ The approved setup or test command, run by loop code through the `Sandbox` with 
 _Avoid_: step command
 
 **Park**:
-The run stops before a pull request, tells the user why, and keeps the workspace and the loop state.
+The run stops before a pull request, tells the user why and shows the last test output, and keeps the workspace and the loop state. `/implement continue [note]` gives a run parked in the build 3 more rounds; `/implement stop` drops it.
 _Avoid_: fail, abort
+
+**Round**:
+One pass of the test-first build and check, counted once for the whole run. The cap is 3; `continue` adds 3. A tests step that writes a non-test file, tests that pass before any code, and red tests after the code each end a round.
+_Avoid_: iteration, attempt

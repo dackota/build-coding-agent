@@ -9,7 +9,7 @@ import type { Tool } from "ai";
 import { z } from "zod";
 import type { SubAgentDef } from "./config.ts";
 import { parseToolApprovalResponse } from "./hitl.ts";
-import { type Action, begin, isOpen, type Issue, type LoopEvent, type LoopState, type Next, next, parseImplementCommand, type Target } from "./loop.ts";
+import { type Action, begin, canContinue, isHeld, isTestFile, type Issue, type LoopEvent, type LoopState, type Next, next, parseImplementCommand, ROUND_CAP, type Target } from "./loop.ts";
 import { findCommands } from "./loop-commands.ts";
 import { type Github, openGithub } from "./loop-github.ts";
 import { log } from "./log.ts";
@@ -172,12 +172,32 @@ async function runLoopCommand(env: LoopEnv, command: string): Promise<{ ok: bool
   return { ok: got.exitCode === 0 && !timedOut, output: `${got.stdout}${got.stderr}`, timedOut };
 }
 
-async function build(env: LoopEnv, state: LoopState): Promise<LoopEvent> {
+/** What every executor prompt carries: the issue, the user's note, the last findings and the last test output. */
+function context(state: LoopState): string {
+  const parts = [issueText(state.target, state.issue!)];
+  if (state.note) parts.push(`Note from the user: ${state.note}`);
+  if (state.feedback) parts.push(state.feedback);
+  if (state.testOutput) parts.push(`Last test output:\n${tail(state.testOutput)}`);
+  return parts.join("\n\n");
+}
+
+const TESTS_PROMPT = (test: string | undefined) =>
+  `Write ONLY the tests for this GitHub issue in the repository in your workspace: new test files, and no other file. Read the code first (read_file, search). Do not write the feature. You have no shell: the loop runs the tests afterwards with \`${test}\`, and they must fail now because the feature is missing. Reply with a one-line summary when done.`;
+const CODE_PROMPT = (test: string | undefined) =>
+  `The tests for this GitHub issue are written and fail. Write the code that makes them pass. Read the tests and the code first (read_file, search). Do not weaken the tests. You have no shell: the loop runs the tests afterwards with \`${test}\`, and they must pass. Reply with a one-line summary when done.`;
+
+/** Removes what the executor wrote that the step did not allow: restores a tracked file, deletes a new one. */
+async function revert(env: LoopEnv, paths: readonly string[]): Promise<void> {
+  for (const path of paths) await env.sandbox.exec(`git checkout -- ${shellQuote(path)} 2>/dev/null || rm -f -- ${shellQuote(path)}`);
+}
+
+async function build(env: LoopEnv, state: LoopState, kind: "tests" | "code"): Promise<LoopEvent> {
   const changes = new ChangeTracker();
-  const prompt = `Implement this GitHub issue in the repository in your workspace. Read the code first (read_file, search), then write the change and its tests with write_file and edit_file. You have no shell: the loop runs the tests afterwards with \`${state.commands?.test}\`, and they must pass. Change only what the issue asks for. Reply with a one-line summary when done.\n\n${issueText(state.target, state.issue!)}`;
+  const prompt = `${kind === "tests" ? TESTS_PROMPT(state.commands?.test) : CODE_PROMPT(state.commands?.test)}\n\n${context(state)}`;
   await runSubAgent(subAgent(env, "executor"), prompt, { fileTools: env.fileTools(changes), taskId: env.taskId, opts: env.subAgentOpts });
   const files = await changes.changedPaths(env.sandbox);
-  return { type: "built", ok: files.length > 0, files };
+  if (kind === "tests") await revert(env, files.filter((f) => !isTestFile(f)));
+  return { type: "built", ok: true, files };
 }
 
 async function pushChangedFiles(env: LoopEnv, state: LoopState): Promise<void> {
@@ -194,7 +214,8 @@ async function perform(env: LoopEnv, state: LoopState, action: Action, hadPriorR
     case "ready-check": return readyCheck(env, state);
     case "commands": return findProjectCommands(env);
     case "setup": return { type: "setup", ...(await runLoopCommand(env, state.commands!.setup!)) };
-    case "build": return build(env, state);
+    case "build-tests": return build(env, state, "tests");
+    case "build-code": return build(env, state, "code");
     case "test": {
       const got = await runLoopCommand(env, state.commands!.test);
       return { type: "tested", green: got.ok, output: got.output, timedOut: got.timedOut };
@@ -223,7 +244,9 @@ function report(env: LoopEnv, io: LoopIo, before: LoopState, after: LoopState): 
 }
 
 function parkedText(state: LoopState): string {
-  return `Parked: ${state.reason ?? "the run stopped"}\nThe workspace and the run's state are kept.`;
+  const output = state.testOutput ? `\n\nLast test output:\n${tail(state.testOutput)}` : "";
+  const nextHint = canContinue(state) ? `\nSend /implement continue [note] for ${ROUND_CAP} more rounds, or /implement stop to drop the run.` : "\nSend /implement stop to drop the run.";
+  return `Parked: ${state.reason ?? "the run stopped"}${output}\nThe workspace and the run's state are kept.${nextHint}`;
 }
 
 /** Saves the state, then does actions until the run finishes, parks, or pauses for the start approval. */
@@ -274,10 +297,37 @@ export async function handleLoopMessage({ env, io, session, text, message }: Loo
     await io.reply(command.message);
     return true;
   }
-  if (isOpen(session.loop)) {
-    await io.reply(`A run is already open in this session (${session.loop!.target.owner}/${session.loop!.target.repo}#${session.loop!.target.number}, at step ${session.loop!.step}). Finish or answer it first.`);
+  const loop = session.loop;
+  if (command.kind === "stop") return stopRun(env, io, session);
+  if (command.kind === "continue") {
+    if (!loop || !canContinue(loop)) {
+      await io.reply("There is no parked run to continue in this session.");
+      return true;
+    }
+    const after = next(loop, { type: "continue", note: command.note });
+    report(env, io, loop, after.state);
+    await drive(env, io, session, after, true);
     return true;
   }
-  await drive(env, io, session, begin(command.target), session.loop !== undefined);
+  if (isHeld(loop)) {
+    const where = loop!.step === "parked" ? "parked" : `at step ${loop!.step}`;
+    await io.reply(`A run is already open in this session (${loop!.target.owner}/${loop!.target.repo}#${loop!.target.number}, ${where}). Finish or answer it first${loop!.step === "parked" ? ", or send /implement continue [note] or /implement stop" : ""}.`);
+    return true;
+  }
+  await drive(env, io, session, begin(command.target), loop !== undefined);
+  return true;
+}
+
+/** `/implement stop`: the run is dropped, its workspace is cleared by the next run. */
+async function stopRun(env: LoopEnv, io: LoopIo, session: SessionState): Promise<boolean> {
+  const loop = session.loop;
+  if (!isHeld(loop)) {
+    await io.reply("There is no run to stop in this session.");
+    return true;
+  }
+  const after = next(loop!, { type: "stop" });
+  report(env, io, loop!, after.state);
+  saveSession(env.dataDir, env.contextId, { ...session, loop: after.state, pending: undefined });
+  await io.reply("Stopped the run. Send /implement <issue URL> to start a new one.");
   return true;
 }

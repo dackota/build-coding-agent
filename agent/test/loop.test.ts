@@ -1,10 +1,10 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { type Action, actionFor, begin, branchName, type LoopEvent, type LoopState, next, parseImplementCommand } from "../src/loop.ts";
+import { type Action, actionFor, begin, branchName, canContinue, isLockfile, isTestFile, type LoopEvent, type LoopState, next, parseImplementCommand, ROUND_CAP } from "../src/loop.ts";
 
 const TARGET = { owner: "acme", repo: "widgets", number: 12 };
 const ISSUE = { title: "Add a farewell function", body: "Say goodbye.", comments: [] as string[] };
-const ACTION_KINDS = ["read", "ready-check", "commands", "approve", "setup", "build", "test", "pr-branch", "pr-push", "pr-open", "finish", "park", "noop"];
+const ACTION_KINDS = ["read", "ready-check", "commands", "approve", "setup", "build-tests", "build-code", "test", "pr-branch", "pr-push", "pr-open", "finish", "park", "noop"];
 
 const text = fc.string({ maxLength: 40 });
 const eventArb: fc.Arbitrary<LoopEvent> = fc.oneof(
@@ -19,6 +19,8 @@ const eventArb: fc.Arbitrary<LoopEvent> = fc.oneof(
   fc.constant({ type: "pushed" as const }),
   fc.record({ type: fc.constant("opened" as const), url: text }),
   fc.record({ type: fc.constant("failed" as const), code: text, reason: text }),
+  fc.record({ type: fc.constant("continue" as const), note: fc.option(text, { nil: undefined }) }),
+  fc.constant({ type: "stop" as const }),
 );
 
 /** The event a runner would send back for this action, with a coin for success. */
@@ -29,7 +31,9 @@ function eventFor(action: Action, ok: boolean, words: string): LoopEvent | undef
     case "commands": return { type: "commands", setup: ok ? "npm ci" : undefined, test: "npm test" };
     case "approve": return { type: "approval", approved: ok, reason: words };
     case "setup": return { type: "setup", ok, output: words };
-    case "build": return { type: "built", ok, files: ["a.js"] };
+    case "build-tests": return { type: "built", ok: true, files: ok ? ["test/a.test.js"] : ["a.js"] };
+    case "build-code": return { type: "built", ok: true, files: ok ? ["a.js"] : ["package-lock.json"] };
+    case "park": return { type: "continue", note: words };
     case "test": return { type: "tested", green: ok, output: words };
     case "pr-branch": return { type: "branched" };
     case "pr-push": return { type: "pushed" };
@@ -71,6 +75,8 @@ describe("the loop step machine", () => {
       { type: "commands", setup: "npm ci", test: "npm test" },
       { type: "approval", approved: true },
       { type: "setup", ok: true, output: "" },
+      { type: "built", ok: true, files: ["test/farewell.test.js"] },
+      { type: "tested", green: false, output: "1 failing" },
       { type: "built", ok: true, files: ["farewell.js"] },
       { type: "tested", green: true, output: "ok" },
       { type: "branched" },
@@ -80,7 +86,7 @@ describe("the loop step machine", () => {
       ({ state, action } = next(state, event));
       kinds.push(action.kind);
     }
-    expect(kinds).toEqual(["read", "ready-check", "commands", "approve", "setup", "build", "test", "pr-branch", "pr-push", "pr-open", "finish"]);
+    expect(kinds).toEqual(["read", "ready-check", "commands", "approve", "setup", "build-tests", "test", "build-code", "test", "pr-branch", "pr-push", "pr-open", "finish"]);
     expect(state.step).toBe("done");
     expect(state.prUrl).toBe("https://github.com/acme/widgets/pull/7");
   });
@@ -119,7 +125,7 @@ describe("the loop step machine", () => {
         trace.forEach((t, i) => {
           if (!t.action.kind.startsWith("pr-") || t.before.step === "pr") return;
           // The event that opened the pull request stage is a green test result in the check step.
-          expect(t.before.step).toBe("check");
+          expect(t.before.step).toBe("check-green");
           expect(t.event).toMatchObject({ type: "tested", green: true });
           const events = trace.slice(0, i + 1).map((x) => x.event);
           const lastBuilt = events.map((e) => e.type).lastIndexOf("built");
@@ -188,11 +194,159 @@ describe("the /implement command", () => {
       "/implement https://github.com/acme/../issues/12",
       "/implement https://github.com/acme/widgets/issues/12 extra",
       "/implement https://github.com/acme/widgets/issues/12?x=1",
-      "/implement continue",
+      "/implement stopping",
+      "/implement continuous",
     ]) {
       const got = parseImplementCommand(t);
       expect(got.kind).toBe("invalid");
       expect((got as { message: string }).message).toContain("/implement https://github.com/<owner>/<repo>/issues/<n>");
     }
+  });
+
+  it("reads continue with and without a note, and stop", () => {
+    expect(parseImplementCommand("/implement continue")).toEqual({ kind: "continue" });
+    expect(parseImplementCommand("/implement continue fix the off-by-one")).toEqual({ kind: "continue", note: "fix the off-by-one" });
+    expect(parseImplementCommand("  /implement   continue   try  harder \n")).toEqual({ kind: "continue", note: "try  harder" });
+    expect(parseImplementCommand("/implement stop")).toEqual({ kind: "stop" });
+  });
+});
+
+/** A run walked through the events a runner sends. */
+function runTo(events: LoopEvent[]): { state: LoopState; action: Action } {
+  let got = begin(TARGET);
+  for (const event of events) got = next(got.state, event);
+  return got;
+}
+const TO_APPROVED: LoopEvent[] = [
+  { type: "read", issue: ISSUE, baseBranch: "main" },
+  { type: "ready", ready: true, reason: "clear" },
+  { type: "commands", setup: "npm ci", test: "npm test" },
+  { type: "approval", approved: true },
+  { type: "setup", ok: true, output: "" },
+];
+const TESTS_WRITTEN: LoopEvent = { type: "built", ok: true, files: ["test/a.test.js"] };
+const CODE_WRITTEN: LoopEvent = { type: "built", ok: true, files: ["a.js"] };
+const RED: LoopEvent = { type: "tested", green: false, output: "1 failing" };
+const GREEN: LoopEvent = { type: "tested", green: true, output: "ok" };
+
+describe("test-first build", () => {
+  it("runs the tests after the tests are written, and the code only after they are red", () => {
+    const afterTests = runTo([...TO_APPROVED, TESTS_WRITTEN]);
+    expect(afterTests.state.step).toBe("check-red");
+    expect(afterTests.action).toEqual({ kind: "test" });
+    const afterRed = next(afterTests.state, RED);
+    expect(afterRed.state.step).toBe("build-code");
+    expect(afterRed.state.round).toBe(1);
+    expect(afterRed.state.testOutput).toBe("1 failing");
+    expect(next(afterRed.state, CODE_WRITTEN).state.step).toBe("check-green");
+  });
+
+  it("sends tests that pass at once back to the tests step with that fact, in the next round", () => {
+    const got = next(runTo([...TO_APPROVED, TESTS_WRITTEN]).state, GREEN);
+    expect(got.state.step).toBe("build-tests");
+    expect(got.state.round).toBe(2);
+    expect(got.state.feedback).toMatch(/passed before any code/i);
+    expect(got.action.kind).toBe("build-tests");
+  });
+
+  it("treats a non-test file written with the tests as a protocol error for the round", () => {
+    const got = next(runTo(TO_APPROVED).state, { type: "built", ok: true, files: ["test/a.test.js", "src/feature.js"] });
+    expect(got.state.step).toBe("build-tests");
+    expect(got.state.round).toBe(2);
+    expect(got.state.feedback).toContain("src/feature.js");
+    expect(got.state.feedback).toMatch(/protocol error/i);
+  });
+
+  it("sends red after the code back to the code step with the test output", () => {
+    const checked = runTo([...TO_APPROVED, TESTS_WRITTEN, RED, CODE_WRITTEN]).state;
+    const got = next(checked, { type: "tested", green: false, output: "still 1 failing" });
+    expect(got.state.step).toBe("build-code");
+    expect(got.state.round).toBe(2);
+    expect(got.state.testOutput).toBe("still 1 failing");
+  });
+
+  it("parks at the cap with the reason, and continue gives it three more rounds and the note", () => {
+    let got = runTo([...TO_APPROVED, TESTS_WRITTEN, RED]);
+    for (let round = 1; round < ROUND_CAP; round++) got = next(next(got.state, CODE_WRITTEN).state, RED);
+    expect(got.state.step).toBe("build-code");
+    expect(got.state.round).toBe(ROUND_CAP);
+    const parked = next(next(got.state, CODE_WRITTEN).state, RED);
+    expect(parked.action.kind).toBe("park");
+    expect(parked.state.round).toBe(ROUND_CAP);
+    expect(parked.state.reason).toMatch(/3 rounds/);
+    expect(canContinue(parked.state)).toBe(true);
+
+    const resumed = next(parked.state, { type: "continue", note: "fix the off-by-one" });
+    expect(resumed.state.step).toBe("build-code");
+    expect(resumed.state.round).toBe(ROUND_CAP + 1);
+    expect(resumed.state.note).toBe("fix the off-by-one");
+    expect(resumed.state.cap).toBe(2 * ROUND_CAP);
+  });
+
+  it("cannot continue a run that parked before the build", () => {
+    const parked = runTo([{ type: "read", issue: ISSUE, baseBranch: "main" }, { type: "ready", ready: false, reason: "thin" }]);
+    expect(canContinue(parked.state)).toBe(false);
+    expect(next(parked.state, { type: "continue" }).state).toEqual(parked.state);
+  });
+
+  it("stops a run at any step but done", () => {
+    expect(next(runTo(TO_APPROVED).state, { type: "stop" }).state.step).toBe("stopped");
+    expect(next(runTo([{ type: "failed", code: "x", reason: "boom" }]).state, { type: "stop" }).state.step).toBe("stopped");
+  });
+
+  it("runs setup again, then the check, when the code step changes a lockfile and a setup command was approved", () => {
+    const inCode = runTo([...TO_APPROVED, TESTS_WRITTEN, RED]).state;
+    const got = next(inCode, { type: "built", ok: true, files: ["a.js", "package-lock.json"] });
+    expect(got.action.kind).toBe("setup");
+    expect(next(got.state, { type: "setup", ok: true, output: "" }).state.step).toBe("check-green");
+    const noSetup = runTo([...TO_APPROVED.slice(0, 2), { type: "commands", setup: undefined, test: "t" }, { type: "approval", approved: true }, TESTS_WRITTEN, RED]);
+    expect(next(noSetup.state, { type: "built", ok: true, files: ["package-lock.json"] }).state.step).toBe("check-green");
+  });
+
+  it("knows test files and lockfiles", () => {
+    for (const f of ["test/a.js", "tests/x/y.py", "src/__tests__/a.ts", "a.test.js", "a_test.go", "test_a.py", "a.spec.ts"]) expect(isTestFile(f)).toBe(true);
+    for (const f of ["src/a.js", "latest.js", "contest/a.js", "package.json", "src/protest.ts"]) expect(isTestFile(f)).toBe(false);
+    for (const f of ["package-lock.json", "web/pnpm-lock.yaml", "go.sum"]) expect(isLockfile(f)).toBe(true);
+    expect(isLockfile("package.json")).toBe(false);
+  });
+
+  it("never starts build-code before a red check-red", () => {
+    // Positive side: after the tests are written the run waits in check-red, and only a red result (any output) opens build-code.
+    fc.assert(
+      fc.property(text, fc.boolean(), (output, green) => {
+        const atCheck = runTo([...TO_APPROVED, TESTS_WRITTEN]);
+        expect(atCheck.state.step).toBe("check-red");
+        expect(atCheck.action.kind).toBe("test");
+        const got = next(atCheck.state, { type: "tested", green, output });
+        expect(got.state.step).toBe(green ? "build-tests" : "build-code");
+      }),
+      { numRuns: 100 },
+    );
+    fc.assert(
+      fc.property(seedsArb, (seeds) => {
+        const trace = drive(seeds);
+        trace.forEach((t, i) => {
+          if (t.after.step !== "build-code") return;
+          expect(trace.slice(0, i + 1).some((x) => x.before.step === "check-red" && x.after.step === "build-code" && x.event.type === "tested" && !x.event.green)).toBe(true);
+        });
+      }),
+      { numRuns: 500 },
+    );
+  });
+
+  it("never lets the round count pass the cap (3, plus 3 per continue)", () => {
+    fc.assert(
+      fc.property(seedsArb, (seeds) => {
+        const trace = drive(seeds);
+        let continues = 0;
+        for (const t of trace) {
+          if (t.before.step === "parked" && t.after.step !== "parked" && t.event.type === "continue") continues++;
+          expect(t.after.round).toBeLessThanOrEqual(ROUND_CAP * (1 + continues));
+          expect(t.after.round).toBeLessThanOrEqual(t.after.cap);
+          expect(t.after.cap).toBe(ROUND_CAP * (1 + continues));
+        }
+      }),
+      { numRuns: 500 },
+    );
   });
 });

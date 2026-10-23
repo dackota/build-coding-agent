@@ -35,10 +35,17 @@ const READY: ScriptedReply = '{"ready": true, "reason": "says what to build and 
 const write = (path: string, content: string): ScriptedReply => ({ toolCall: { name: "write_file", args: { path, content } } });
 const PASSING_REPO = {
   "AGENTS.md": "# Rules\n- Setup: `touch setup.marker`\n- Test: `sh test.sh`\n",
-  "test.sh": 'echo SENTINEL-TEST-OUTPUT\ntest -f feature.txt\n',
+  // Runs every test/*.test.sh: red until one exists and passes.
+  "test.sh": 'echo SENTINEL-TEST-OUTPUT\nfor t in test/*.test.sh; do sh "$t" || exit 1; done\n',
 };
-/** A happy-path script: ready check, the executor writes feature.txt, then says so. */
-const HAPPY: ScriptedReply[] = [READY, write("feature.txt", "SENTINEL-FILE-CONTENT\n"), "Wrote feature.txt."];
+/** The executor's tests step: a test that needs feature.txt. */
+const TESTS_STEP: ScriptedReply[] = [write("test/feature.test.sh", "test -f feature.txt\n"), "Wrote the test."];
+/** The executor's code step: the feature. */
+const CODE_STEP: ScriptedReply[] = [write("feature.txt", "SENTINEL-FILE-CONTENT\n"), "Wrote feature.txt."];
+/** A code step that leaves the tests red. */
+const WRONG_CODE: ScriptedReply[] = [write("wrong.txt", "nope\n"), "Wrote wrong.txt."];
+/** A happy-path script: ready check, tests, then code. */
+const HAPPY: ScriptedReply[] = [READY, ...TESTS_STEP, ...CODE_STEP];
 
 /** A repo served over file://, where https://github.com/<owner>/<repo>.git would be. */
 function makeGitHost(owner: string, repo: string, files: Record<string, string>): string {
@@ -113,6 +120,8 @@ async function turn(opts: Parameters<typeof sendTurn>[1]): Promise<Turn> {
 const approve = (paused: Turn, contextId: string) =>
   turn({ text: "approve", taskId: paused.taskId, contextId, approvals: [{ id: paused.approvalRequest!.tools[0]!.id, approved: true }] });
 const calledTools = () => mcp!.calls.map((c) => c.name);
+/** The request bodies of the executor subagent's model calls, in order. */
+const executorBodies = () => model!.requests.map((r) => r.body).filter((b) => b.includes("strong-model"));
 const loopLines = () =>
   agent!
     .output()
@@ -135,7 +144,15 @@ describe("/implement on a ready issue", () => {
     const byName = (name: string) => mcp!.calls.find((c) => c.name === name)!.args as Record<string, any>;
     expect(byName("create_branch")).toMatchObject({ owner: "acme", repo: "widgets", branch: BRANCH });
     expect(byName("push_files")).toMatchObject({ owner: "acme", repo: "widgets", branch: BRANCH });
-    expect(byName("push_files").files).toEqual([{ path: "feature.txt", content: "SENTINEL-FILE-CONTENT\n" }]);
+    expect(byName("push_files").files).toEqual([
+      { path: "feature.txt", content: "SENTINEL-FILE-CONTENT\n" },
+      { path: "test/feature.test.sh", content: "test -f feature.txt\n" },
+    ]);
+    expect(calledTools().filter((n) => n === "create_pull_request")).toHaveLength(1);
+    // The tests came first: the first executor prompt asks for tests only, the second for code.
+    const executorPrompts = executorBodies();
+    expect(executorPrompts[0]).toMatch(/ONLY the tests/);
+    expect(executorPrompts.at(-1)).toMatch(/Write the code that makes them pass/);
     const pr = byName("create_pull_request");
     expect(pr).toMatchObject({ owner: "acme", repo: "widgets", head: BRANCH, base: "main" });
     expect(pr.body).toContain(ISSUE_URL);
@@ -189,7 +206,7 @@ describe("/implement on a ready issue", () => {
 
     const lines = loopLines();
 
-    expect(lines.map((l) => l.step)).toEqual(["read", "ready-check", "commands", "approve", "setup", "build", "check", "pr", "pr", "pr"]);
+    expect(lines.map((l) => l.step)).toEqual(["read", "ready-check", "commands", "approve", "setup", "build-tests", "check-red", "build-code", "check-green", "pr", "pr", "pr"]);
     for (const line of lines) {
       expect(Object.keys(line).sort()).toEqual(["event", "result", "round", "step", "t", "taskId"]);
       expect(line.round).toBe(1);
@@ -293,5 +310,140 @@ describe("/implement commands", () => {
     // The first run still waits for its answer.
     const done = await approve(paused, contextId);
     expect(done.text).toBe(PR_URL);
+  });
+});
+
+const SETUP_REPO = { ...PASSING_REPO, "AGENTS.md": "- Setup: `echo ran >> setup.log`\n- Test: `sh test.sh`\n" };
+/** Three code rounds that stay red (the last text reply repeats for any further call). */
+const THREE_RED: ScriptedReply[] = [READY, ...TESTS_STEP, ...WRONG_CODE, "Still wrong.", "Still wrong."];
+
+describe("test-first rounds", () => {
+  it("sends tests that pass at once back to the executor, and says so in the next prompt", async () => {
+    const { contextId } = await boot([READY, write("test/feature.test.sh", "true\n"), "Wrote a test.", ...TESTS_STEP, ...CODE_STEP]);
+    const paused = await turn({ text: IMPLEMENT, contextId });
+
+    const done = await approve(paused, contextId);
+
+    expect(done.text).toBe(PR_URL);
+    const prompts = executorBodies();
+    expect(prompts[0]).not.toContain("passed before any code");
+    expect(prompts.some((b) => b.includes("passed before any code") && b.includes("fails for the right reason") === false && b.includes("fail for the right reason"))).toBe(true);
+    expect(calledTools().filter((n) => n === "create_pull_request")).toHaveLength(1);
+  });
+
+  it("sends back a non-test file written with the tests", async () => {
+    const { contextId } = await boot([READY, write("feature.txt", "early\n"), "Wrote it.", ...TESTS_STEP, ...CODE_STEP]);
+    const paused = await turn({ text: IMPLEMENT, contextId });
+
+    const done = await approve(paused, contextId);
+
+    expect(done.text).toBe(PR_URL);
+    expect(executorBodies().some((b) => b.includes("Protocol error") && b.includes("feature.txt"))).toBe(true);
+    expect(mcp!.calls.find((c) => c.name === "push_files")!.args as { files: { path: string; content: string }[] }).toMatchObject({
+      files: expect.arrayContaining([{ path: "feature.txt", content: "SENTINEL-FILE-CONTENT\n" }]),
+    });
+  });
+
+  it("goes back to the executor on red after the code, then opens the pull request on green", async () => {
+    const { contextId } = await boot([READY, ...TESTS_STEP, ...WRONG_CODE, ...CODE_STEP]);
+    const paused = await turn({ text: IMPLEMENT, contextId });
+
+    const done = await approve(paused, contextId);
+
+    expect(done.text).toBe(PR_URL);
+    expect(executorBodies().some((b) => b.includes("still fail after your code") && b.includes("SENTINEL-TEST-OUTPUT"))).toBe(true);
+    expect(calledTools().filter((n) => n === "create_pull_request")).toHaveLength(1);
+    expect(loopLines().filter((l) => l.step === "build-code").map((l) => l.round)).toEqual([1, 2]);
+  });
+
+  it("parks after three red rounds with the reason and the last test output, and makes no branch", async () => {
+    const { contextId } = await boot(THREE_RED);
+    const paused = await turn({ text: IMPLEMENT, contextId });
+
+    const got = await approve(paused, contextId);
+
+    expect(got.state).toBe(TaskState.TASK_STATE_COMPLETED);
+    expect(got.text).toMatch(/parked/i);
+    expect(got.text).toMatch(/3 rounds/);
+    expect(got.text).toContain("SENTINEL-TEST-OUTPUT");
+    expect(calledTools()).not.toContain("create_branch");
+  });
+
+  it("continue gives a parked run three more rounds and puts the note in the next executor prompt", async () => {
+    const { contextId } = await boot([...THREE_RED, ...CODE_STEP]);
+    const paused = await turn({ text: IMPLEMENT, contextId });
+    const parked = await approve(paused, contextId);
+    expect(parked.text).toMatch(/parked/i);
+    const before = executorBodies().length;
+
+    const done = await turn({ text: "/implement continue fix the off-by-one", contextId });
+
+    expect(done.text).toBe(PR_URL);
+    const after = executorBodies().slice(before);
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.every((b) => b.includes("fix the off-by-one"))).toBe(true);
+    expect(executorBodies().slice(0, before).some((b) => b.includes("fix the off-by-one"))).toBe(false);
+    expect(loopLines().filter((l) => l.step === "build-code").map((l) => l.round)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("parks again after six rounds when continue does not help", async () => {
+    const { contextId } = await boot(THREE_RED);
+    const paused = await turn({ text: IMPLEMENT, contextId });
+    await approve(paused, contextId);
+
+    const got = await turn({ text: "/implement continue", contextId });
+
+    expect(got.text).toMatch(/parked/i);
+    expect(got.text).toMatch(/6 rounds/);
+    expect(loopLines().filter((l) => l.step === "build-code").map((l) => l.round)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(calledTools()).not.toContain("create_branch");
+  });
+
+  it("says there is nothing to continue when no run is parked", async () => {
+    const { contextId } = await boot(HAPPY);
+
+    const got = await turn({ text: "/implement continue", contextId });
+
+    expect(got.state).toBe(TaskState.TASK_STATE_COMPLETED);
+    expect(got.text).toMatch(/no parked run/i);
+    expect(model!.requests).toHaveLength(0);
+  });
+
+  it("stop drops a parked run so a new /implement starts", async () => {
+    const { contextId } = await boot([...THREE_RED, READY]);
+    const paused = await turn({ text: IMPLEMENT, contextId });
+    await approve(paused, contextId);
+
+    const refused = await turn({ text: IMPLEMENT, contextId });
+    const stopped = await turn({ text: "/implement stop", contextId });
+    const started = await turn({ text: IMPLEMENT, contextId });
+
+    expect(refused.text).toMatch(/already/i);
+    expect(refused.text).toMatch(/parked/i);
+    expect(stopped.state).toBe(TaskState.TASK_STATE_COMPLETED);
+    expect(stopped.text).toMatch(/stopped/i);
+    expect(started.state).toBe(TaskState.TASK_STATE_INPUT_REQUIRED);
+    expect(started.approvalRequest).toBeDefined();
+  });
+
+  it("runs setup once when no lockfile changes across rounds", async () => {
+    const { contextId, workspace } = await boot([READY, ...TESTS_STEP, ...WRONG_CODE, ...CODE_STEP], { files: SETUP_REPO });
+    const paused = await turn({ text: IMPLEMENT, contextId });
+
+    const done = await approve(paused, contextId);
+
+    expect(done.text).toBe(PR_URL);
+    expect(readFileSync(join(workspace, "setup.log"), "utf8").trim().split("\n")).toEqual(["ran"]);
+  });
+
+  it("runs setup again when the executor changes the lockfile", async () => {
+    const lockfileCode: ScriptedReply[] = [write("feature.txt", "SENTINEL-FILE-CONTENT\n"), write("package-lock.json", "{}\n"), "Wrote feature and lockfile."];
+    const { contextId, workspace } = await boot([READY, ...TESTS_STEP, ...lockfileCode], { files: SETUP_REPO });
+    const paused = await turn({ text: IMPLEMENT, contextId });
+
+    const done = await approve(paused, contextId);
+
+    expect(done.text).toBe(PR_URL);
+    expect(readFileSync(join(workspace, "setup.log"), "utf8").trim().split("\n")).toEqual(["ran", "ran"]);
   });
 });
