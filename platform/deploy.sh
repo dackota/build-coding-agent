@@ -12,7 +12,6 @@ READY_TIMEOUT="${READY_TIMEOUT:-180s}"
 MANIFEST_TYPES="application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json"
 
 GITHUB_TOKEN_NAME="GITHUB_TOKEN"
-GITHUB_MCP_NS="github-mcp"
 GITHUB_TOKEN_SECRET="github-mcp-token"
 
 # Secret github-mcp-token in the agents namespace from GITHUB_TOKEN in .env, value
@@ -30,12 +29,9 @@ make_github_token_secret() {
   echo "Secret $AGENTS_NS/$GITHUB_TOKEN_SECRET made from $GITHUB_TOKEN_NAME"
 }
 
-# The GitHub MCP server, restarted so a new image or args take effect. Its namespace holds no
-# Secret: the old auth proxy's Secret and ConfigMap are deleted if a cluster still has them.
+# The GitHub MCP server, restarted so a new image or args take effect. Its namespace holds no Secret.
 deploy_github_mcp() {
   sed "s|@GITHUB_MCP_IMAGE@|$GITHUB_MCP_IMAGE|" "$PLATFORM_DIR/github-mcp.yaml" | k apply -f -
-  k delete secret "$GITHUB_TOKEN_SECRET" -n "$GITHUB_MCP_NS" --ignore-not-found
-  k delete configmap github-mcp-proxy -n "$GITHUB_MCP_NS" --ignore-not-found
   k rollout restart deployment/github-mcp -n "$GITHUB_MCP_NS"
   k rollout status deployment/github-mcp -n "$GITHUB_MCP_NS" --timeout="$READY_TIMEOUT"
 }

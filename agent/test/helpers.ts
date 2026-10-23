@@ -126,7 +126,7 @@ export function writeFakeConfig(baseUrl: string, opts: { controlPlaneUrl?: strin
         gateway_url: "http://unused",
         ...(opts.controlPlaneUrl ? { control_plane_url: opts.controlPlaneUrl } : {}),
         name: "hello-agent",
-        namespace: "kagent",
+        namespace: "agents",
         port: 80,
       },
       agent: {

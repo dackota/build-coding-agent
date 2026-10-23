@@ -30,11 +30,11 @@ it("sends one SendMessage to the controller's agent endpoint and returns the rep
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const { port } = server.address() as AddressInfo;
 
-  const reply = await sendMessage({ baseUrl: `http://127.0.0.1:${port}`, namespace: "kagent", agent: "hello-agent", text: "hi" });
+  const reply = await sendMessage({ baseUrl: `http://127.0.0.1:${port}`, namespace: "agents", agent: "hello-agent", text: "hi" });
   server.close();
 
   expect(reply).toBe("forty-two");
-  expect(seen.url).toBe("/agents/kagent/hello-agent");
+  expect(seen.url).toBe("/agents/agents/hello-agent");
   expect(seen.headers["a2a-version"]).toBe("1.0");
   expect(JSON.parse(seen.body)).toMatchObject({ method: "SendMessage", params: { message: { role: "ROLE_USER", parts: [{ text: "hi" }] } } });
 });
@@ -47,7 +47,7 @@ it("throws when the controller answers a JSON-RPC error", async () => {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const { port } = server.address() as AddressInfo;
   await expect(
-    sendMessage({ baseUrl: `http://127.0.0.1:${port}`, namespace: "kagent", agent: "a", text: "x" }),
+    sendMessage({ baseUrl: `http://127.0.0.1:${port}`, namespace: "agents", agent: "a", text: "x" }),
   ).rejects.toThrow(/agent down/);
   server.close();
 });
@@ -92,11 +92,11 @@ async function stubController(reply: unknown) {
 
 it("sends the A2A-Extensions HITL header on every message", async () => {
   const stub = await stubController(PAUSED);
-  await sendMessage({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "hi" }).catch(() => undefined);
-  await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "hi" });
+  await sendMessage({ baseUrl: stub.baseUrl, namespace: "agents", agent: "a", text: "hi" }).catch(() => undefined);
+  await sendTurn({ baseUrl: stub.baseUrl, namespace: "agents", agent: "a", text: "hi" });
   await sendTurn({
     baseUrl: stub.baseUrl,
-    namespace: "kagent",
+    namespace: "agents",
     agent: "a",
     text: "blue",
     reply: { taskId: "task-9", contextId: "ctx-9", requestId: "req-1", answers: [["blue"]] },
@@ -109,7 +109,7 @@ it("sends the A2A-Extensions HITL header on every message", async () => {
 
 it("reads a pause from the controller's reply: state, ids, and the questions", async () => {
   const stub = await stubController(PAUSED);
-  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "hi" });
+  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "agents", agent: "a", text: "hi" });
   stub.close();
 
   expect(got.state).toBe("input-required");
@@ -121,7 +121,7 @@ it("reads a pause from the controller's reply: state, ids, and the questions", a
 
 it("continues a session: a new turn on the given context, with no task id", async () => {
   const stub = await stubController({ jsonrpc: "2.0", id: 1, result: { task: { id: "task-2", contextId: "ctx-9", status: { state: "TASK_STATE_COMPLETED" }, artifacts: [{ parts: [{ text: "42" }] }] } } });
-  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "what number?", contextId: "ctx-9" });
+  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "agents", agent: "a", text: "what number?", contextId: "ctx-9" });
   stub.close();
 
   const message = stub.seen[0]?.body.params.message;
@@ -136,7 +136,7 @@ it("answers a pause with an ask_user_response on the same task and context", asy
   const stub = await stubController({ jsonrpc: "2.0", id: 1, result: { task: { id: "task-9", contextId: "ctx-9", status: { state: "TASK_STATE_COMPLETED" }, artifacts: [{ parts: [{ text: "Done: blue." }] }] } } });
   const got = await sendTurn({
     baseUrl: stub.baseUrl,
-    namespace: "kagent",
+    namespace: "agents",
     agent: "a",
     text: "blue",
     reply: { taskId: "task-9", contextId: "ctx-9", requestId: "req-1", answers: [["blue"]] },
@@ -156,7 +156,7 @@ it("sends attached files as raw parts with their file names", async () => {
   const stub = await stubController({ jsonrpc: "2.0", id: 1, result: { task: { id: "t", contextId: "c", status: { state: "TASK_STATE_COMPLETED" }, artifacts: [] } } });
   await sendTurn({
     baseUrl: stub.baseUrl,
-    namespace: "kagent",
+    namespace: "agents",
     agent: "a",
     text: "rename foo to bar",
     files: [{ name: "greet.js", content: Buffer.from("function foo() {}\n") }],
@@ -176,7 +176,7 @@ it("prints each artifact on its own line: the reply, then the diff", async () =>
     id: 1,
     result: { task: { id: "t", contextId: "c", status: { state: "TASK_STATE_COMPLETED" }, artifacts: [{ name: "reply", parts: [{ text: "Renamed." }] }, { name: "diff", parts: [{ text: "--- a/x\n+++ b/x\n" }] }] } },
   });
-  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "go" });
+  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "agents", agent: "a", text: "go" });
   stub.close();
 
   expect(got.text).toBe("Renamed.\n--- a/x\n+++ b/x\n");
@@ -210,7 +210,7 @@ const APPROVAL_PAUSED = {
 
 it("reads a tool approval pause: the tools, ids and hint", async () => {
   const stub = await stubController(APPROVAL_PAUSED);
-  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "clean" });
+  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "agents", agent: "a", text: "clean" });
   stub.close();
 
   expect(got.state).toBe("input-required");
@@ -231,7 +231,7 @@ it("answers a tool approval pause with each decision of the union", async () => 
   for (const decision of decisions) {
     await sendTurn({
       baseUrl: stub.baseUrl,
-      namespace: "kagent",
+      namespace: "agents",
       agent: "a",
       text: decision.type,
       approval: { taskId: "task-5", contextId: "ctx-5", ids: ["appr-1"], decision },
@@ -284,7 +284,7 @@ it("streams text deltas and tool calls to the caller as they arrive", async () =
     sse({ statusUpdate: { taskId: "t-1", contextId: "c-1", status: { state: "TASK_STATE_COMPLETED" } } }),
   ]);
   const events: unknown[] = [];
-  const turn = await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "hi", onEvent: (e) => events.push(e) });
+  const turn = await sendTurn({ baseUrl: stub.baseUrl, namespace: "agents", agent: "a", text: "hi", onEvent: (e) => events.push(e) });
   stub.close();
 
   expect(events).toEqual([
@@ -297,7 +297,7 @@ it("streams text deltas and tool calls to the caller as they arrive", async () =
 
 it("streaming send also carries the HITL header and uses SendStreamingMessage", async () => {
   const stub = await stubStream([sse({ statusUpdate: { taskId: "t-1", contextId: "c-1", status: { state: "TASK_STATE_COMPLETED" } } })]);
-  await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "hi", onEvent: () => {} });
+  await sendTurn({ baseUrl: stub.baseUrl, namespace: "agents", agent: "a", text: "hi", onEvent: () => {} });
   stub.close();
 
   expect(stub.seen[0]?.body.method).toBe("SendStreamingMessage");
@@ -314,7 +314,7 @@ it("reads a pause from a stream", async () => {
       },
     }),
   ]);
-  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "hi", onEvent: () => {} });
+  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "agents", agent: "a", text: "hi", onEvent: () => {} });
   stub.close();
 
   expect(got.state).toBe("input-required");
@@ -327,7 +327,7 @@ it("reads a pause from the task snapshot that ends a stream", async () => {
     sse(working({ type: "tool_call", name: "ask_user", args: {} })),
     sse({ task: PAUSED.result.task }),
   ]);
-  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "kagent", agent: "a", text: "hi", onEvent: () => {} });
+  const got = await sendTurn({ baseUrl: stub.baseUrl, namespace: "agents", agent: "a", text: "hi", onEvent: () => {} });
   stub.close();
 
   expect(got.state).toBe("input-required");
