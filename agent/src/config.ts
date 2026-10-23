@@ -98,31 +98,52 @@ export type McpBinding = {
 
 type RawBinding = { params?: { url?: unknown; headers?: unknown }; tools?: unknown; require_approval?: unknown };
 
-/** The binding's headers; a value that is not a string fails, by key name only (values may be credentials). */
-function toHeaders(raw: unknown, where: string): Record<string, string> {
-  if (raw === undefined || raw === null) return {};
-  if (typeof raw !== "object" || Array.isArray(raw)) throw new Error(`agent config: ${where}.params.headers is not an object; shape ${shape(raw)}`);
-  for (const [key, value] of Object.entries(raw)) {
-    if (typeof value !== "string") throw new Error(`agent config: ${where}.params.headers.${key} is not a string; shape ${shape(value)}`);
-  }
-  return { ...(raw as Record<string, string>) };
+/**
+ * kagent writes a Secret-backed RemoteMCPServer header as __KAGENT_ENV[NAME]__ and sets NAME in
+ * the actor's env to a placeholder; Substrate's egress gateway swaps the placeholder for the
+ * Secret as the request leaves the actor.
+ */
+const ENV_TOKEN = /__KAGENT_ENV\[([A-Za-z_][A-Za-z0-9_]*)\]__/g;
+
+/** The header value with every env token replaced; a missing variable fails by its name only. */
+function expandEnvTokens(value: string, env: NodeJS.ProcessEnv, where: string): string {
+  return value.replace(ENV_TOKEN, (_token, name: string) => {
+    const resolved = env[name];
+    if (resolved === undefined) throw new Error(`agent config: ${where} needs environment variable ${name}, which is not set`);
+    return resolved;
+  });
 }
 
-function toBinding(raw: RawBinding, transport: McpBinding["transport"], where: string): McpBinding {
+/** The binding's headers; a value that is not a string fails, by key name only (values may be credentials). */
+function toHeaders(raw: unknown, where: string, env: NodeJS.ProcessEnv): Record<string, string> {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new Error(`agent config: ${where}.params.headers is not an object; shape ${shape(raw)}`);
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value !== "string") throw new Error(`agent config: ${where}.params.headers.${key} is not a string; shape ${shape(value)}`);
+    headers[key] = expandEnvTokens(value, env, `${where}.params.headers.${key}`);
+  }
+  return headers;
+}
+
+function toBinding(raw: RawBinding, transport: McpBinding["transport"], where: string, env: NodeJS.ProcessEnv): McpBinding {
   const url = raw?.params?.url;
   if (typeof url !== "string" || url === "") throw new Error(`agent config: ${where}.params.url is missing; shape ${shape(raw)}`);
-  const headers = toHeaders(raw.params?.headers, where);
+  const headers = toHeaders(raw.params?.headers, where, env);
   const tools = Array.isArray(raw.tools) ? raw.tools.filter((t): t is string => typeof t === "string") : [];
   return { transport, url, headers, tools, requireApproval: raw.require_approval === true };
 }
 
-/** The MCP bindings under agent.http_tools (Streamable HTTP) and agent.sse_tools (SSE). */
-export function parseMcpBindings(json: string): McpBinding[] {
+/**
+ * The MCP bindings under agent.http_tools (Streamable HTTP) and agent.sse_tools (SSE), with
+ * each __KAGENT_ENV[NAME]__ in a header value replaced by NAME from `env`.
+ */
+export function parseMcpBindings(json: string, env: NodeJS.ProcessEnv = {}): McpBinding[] {
   const agent = ((JSON.parse(json) as { agent?: { http_tools?: unknown; sse_tools?: unknown } }).agent ?? {}) as Record<string, unknown>;
   const list = (key: string): RawBinding[] => (Array.isArray(agent[key]) ? (agent[key] as RawBinding[]) : []);
   return [
-    ...list("http_tools").map((b, i) => toBinding(b, "http", `http_tools[${i}]`)),
-    ...list("sse_tools").map((b, i) => toBinding(b, "sse", `sse_tools[${i}]`)),
+    ...list("http_tools").map((b, i) => toBinding(b, "http", `http_tools[${i}]`, env)),
+    ...list("sse_tools").map((b, i) => toBinding(b, "sse", `sse_tools[${i}]`, env)),
   ];
 }
 

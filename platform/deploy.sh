@@ -15,25 +15,27 @@ GITHUB_TOKEN_NAME="GITHUB_TOKEN"
 GITHUB_MCP_NS="github-mcp"
 GITHUB_TOKEN_SECRET="github-mcp-token"
 
-# Secret github-mcp-token from GITHUB_TOKEN in .env, for the GitHub MCP server's auth proxy
-# only. Delete and create, not apply (apply would copy the token into an annotation); the
-# token reaches kubectl on stdin from printf (a builtin), so it is in no process's argv.
+# Secret github-mcp-token in the agents namespace from GITHUB_TOKEN in .env, value
+# "Bearer <token>": the Authorization header RemoteMCPServer github-mcp takes with headersFrom,
+# which Substrate's egress gateway adds to the agent's requests. Delete and create, not apply
+# (apply would copy the token into an annotation); the token reaches kubectl on stdin from
+# printf (a builtin), so it is in no process's argv.
 make_github_token_secret() {
   local token
   token="$(read_env_value "$GITHUB_TOKEN_NAME")"
   [ -n "$token" ] || fail "$GITHUB_TOKEN_NAME is missing or empty in $ENV_FILE (git out needs it; see .env.example)"
-  k create namespace "$GITHUB_MCP_NS" --dry-run=client -o yaml | k apply -f - >/dev/null
-  k delete secret "$GITHUB_TOKEN_SECRET" -n "$GITHUB_MCP_NS" --ignore-not-found >/dev/null
-  printf %s "$token" | k create secret generic "$GITHUB_TOKEN_SECRET" -n "$GITHUB_MCP_NS" \
+  k delete secret "$GITHUB_TOKEN_SECRET" -n "$AGENTS_NS" --ignore-not-found >/dev/null
+  printf 'Bearer %s' "$token" | k create secret generic "$GITHUB_TOKEN_SECRET" -n "$AGENTS_NS" \
     --from-file=token=/dev/stdin >/dev/null
-  echo "Secret $GITHUB_MCP_NS/$GITHUB_TOKEN_SECRET made from $GITHUB_TOKEN_NAME"
+  echo "Secret $AGENTS_NS/$GITHUB_TOKEN_SECRET made from $GITHUB_TOKEN_NAME"
 }
 
-# The GitHub MCP server and its auth proxy; restarted so a new token or proxy takes effect.
+# The GitHub MCP server, restarted so a new image or args take effect. Its namespace holds no
+# Secret: the old auth proxy's Secret and ConfigMap are deleted if a cluster still has them.
 deploy_github_mcp() {
-  k create configmap github-mcp-proxy -n "$GITHUB_MCP_NS" \
-    --from-file=github-mcp-proxy.mjs="$PLATFORM_DIR/github-mcp-proxy.mjs" --dry-run=client -o yaml | k apply -f -
-  sed -e "s|@NODE_IMAGE@|$NODE_IMAGE|" -e "s|@GITHUB_MCP_IMAGE@|$GITHUB_MCP_IMAGE|" "$PLATFORM_DIR/github-mcp.yaml" | k apply -f -
+  sed "s|@GITHUB_MCP_IMAGE@|$GITHUB_MCP_IMAGE|" "$PLATFORM_DIR/github-mcp.yaml" | k apply -f -
+  k delete secret "$GITHUB_TOKEN_SECRET" -n "$GITHUB_MCP_NS" --ignore-not-found
+  k delete configmap github-mcp-proxy -n "$GITHUB_MCP_NS" --ignore-not-found
   k rollout restart deployment/github-mcp -n "$GITHUB_MCP_NS"
   k rollout status deployment/github-mcp -n "$GITHUB_MCP_NS" --timeout="$READY_TIMEOUT"
 }

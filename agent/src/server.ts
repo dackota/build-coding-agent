@@ -65,7 +65,7 @@ export async function startServer(opts: ServerOptions): Promise<{ server: grpc.S
   // Key names only, never values: shows what kagent put in the config (subagent definitions included).
   const configJson = opts.env.KAGENT_CONFIG_JSON ?? readFileSync(opts.env.KAGENT_CONFIG_PATH ?? "/config/config.json", "utf8");
   const described = describeConfig(configJson);
-  const mcpBindings = parseMcpBindings(configJson);
+  const mcpBindings = parseMcpBindings(configJson, opts.env);
   const skillSources = parseSkillSources(configJson);
   log("config-received", {
     agentKeys: described.agentKeys.join(","),

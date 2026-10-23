@@ -1,7 +1,7 @@
 # triage-agent: the stock runtime (YAML only, harness kagent-stock) reads one GitHub issue
 # and says what to do with it. Its only tool is github-mcp issue_read, a read, so it needs no
-# approval and no EgressPolicy; it cannot push, branch, or open a PR. github-mcp's proxy holds
-# the token (platform/github-mcp.yaml), so none lives here. deploy.sh applies this file.
+# approval and no EgressPolicy; it cannot push, branch, or open a PR. Substrate's egress
+# gateway adds the token to its github-mcp requests (platform/github-mcp.yaml), so none lives here. deploy.sh applies this file.
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
 metadata: {name: triage-agent, namespace: agents}

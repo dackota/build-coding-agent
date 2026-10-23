@@ -133,10 +133,20 @@ spec:
 
 3. Bind it on a template (Recipe 3).
 
-**If it needs a secret, do not put it in `RemoteMCPServer` headers.** kagent copies headers
-into the agent's config, so the agent would hold the secret. Do what `github-mcp.yaml` does:
-put a small proxy in the server's pod that adds the secret from a Secret. The
-`RemoteMCPServer` points at the proxy and has no headers.
+**If it needs a secret, take the header from a Secret with `headersFrom`.** Do what
+`github-mcp.yaml` does: a Secret in `agents` holds the full header value (for example
+`Bearer <token>`), and the `RemoteMCPServer` names it:
+
+```yaml
+  headersFrom:
+    - name: Authorization
+      valueFrom: {type: Secret, name: my-mcp-token, key: token}
+```
+
+kagent puts only `__KAGENT_ENV[KAGENT_CREDENTIAL_<hash>]__` in the agent's config and a
+placeholder in the actor's env. The agent sends the placeholder, and Substrate's egress
+gateway swaps it for the Secret as the request leaves the actor. Never put a secret in a
+plain `value` header: kagent copies those into the agent's config.
 
 ## Recipe 5: a new model
 

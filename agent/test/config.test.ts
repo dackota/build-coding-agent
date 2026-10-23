@@ -1,6 +1,7 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { describeConfig, loadConfig, loadConfigFromEnv, loadRuntimeFromEnv, parseMcpBindings, parseSkillSources } from "../src/config.ts";
 
@@ -125,6 +126,71 @@ it("fails with the entry index and key names when a subagent has no name or mode
     expect(msg).toContain("description");
     expect(msg).not.toContain(secret);
   }
+});
+
+// kagent compiles a Secret-backed RemoteMCPServer header as __KAGENT_ENV[NAME]__ and sets NAME
+// in the actor's env to a placeholder the egress gateway swaps for the Secret.
+// A token names an environment variable; anything else in the brackets is plain text.
+const TOKEN = /__KAGENT_ENV\[[A-Za-z_][A-Za-z0-9_]*\]__/;
+const bindingWith = (value: string): string =>
+  JSON.stringify({ agent: { http_tools: [{ params: { url: "http://mcp/mcp", headers: { Authorization: value } } }] } });
+const VAR_NAME = fc.stringMatching(/^[A-Z_][A-Z0-9_]{0,30}$/);
+// Plain strings, and strings built around near-miss fragments of the token syntax.
+const HEADER_TEXT = fc.oneof(
+  fc.string(),
+  fc.array(fc.oneof(fc.string(), fc.constantFrom("__KAGENT_ENV[", "]__", "__KAGENT_ENV", "[", "]", "__KAGENT_ENV[]_", "_ENV[X]__"))).map((parts) => parts.join("")),
+);
+
+it("passes every MCP header value with no __KAGENT_ENV token through unchanged", () => {
+  fc.assert(
+    fc.property(HEADER_TEXT.filter((v) => !TOKEN.test(v)), (value) => {
+      const [binding] = parseMcpBindings(bindingWith(value), { SOME_VAR: "set" });
+      expect(binding?.headers).toEqual({ Authorization: value });
+    }),
+  );
+});
+
+it("fails naming the variable, never a value, whenever a header token's variable is missing", () => {
+  const secret = "kagent-credential-injected-sentinel";
+  fc.assert(
+    fc.property(VAR_NAME, HEADER_TEXT, HEADER_TEXT, fc.boolean(), (name, before, after, withSetToken) => {
+      const env = { OTHER_CREDENTIAL: secret };
+      const set = withSetToken ? "__KAGENT_ENV[OTHER_CREDENTIAL]__" : "";
+      const value = `${before}${set}__KAGENT_ENV[${name}]__${after}`;
+      // The surrounding text must not form a token of its own with what it touches.
+      const tokens = value.match(new RegExp(TOKEN.source, "g")) ?? [];
+      const expected = [...(withSetToken ? [set] : []), `__KAGENT_ENV[${name}]__`];
+      fc.pre(name !== "OTHER_CREDENTIAL" && JSON.stringify(tokens) === JSON.stringify(expected));
+      let message: string | undefined;
+      try {
+        parseMcpBindings(bindingWith(value), env);
+      } catch (err) {
+        message = (err as Error).message;
+      }
+      expect(message).toBeDefined();
+      expect(message).toContain(name);
+      expect(message).toContain("Authorization");
+      expect(message).not.toContain(secret);
+      if (before.length + after.length > 0) expect(message).not.toContain(value);
+    }),
+  );
+});
+
+it("replaces a __KAGENT_ENV token with its variable's value, also inside a longer value", () => {
+  const env = { KAGENT_CREDENTIAL_ABC123: "kagent-credential-injected", TEAM: "core" };
+  const json = JSON.stringify({
+    agent: {
+      http_tools: [
+        {
+          params: {
+            url: "http://mcp/mcp",
+            headers: { Authorization: "__KAGENT_ENV[KAGENT_CREDENTIAL_ABC123]__", "x-team": "team-__KAGENT_ENV[TEAM]__-west", plain: "as is" },
+          },
+        },
+      ],
+    },
+  });
+  expect(parseMcpBindings(json, env)[0]?.headers).toEqual({ Authorization: "kagent-credential-injected", "x-team": "team-core-west", plain: "as is" });
 });
 
 describe("template skills under agent.agent_plugins", () => {

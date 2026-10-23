@@ -1,10 +1,12 @@
 # The GitHub MCP server for git out: the agent creates a branch, pushes files, and opens a
-# pull request through it. github-mcp-server (http mode, bound to the pod's loopback, only the
-# four tools below) wants a GitHub token on every request; the auth proxy beside it
-# (github-mcp-proxy.mjs, ConfigMap github-mcp-proxy made by deploy.sh) adds it from Secret
-# github-mcp-token (made by deploy.sh from GITHUB_TOKEN in .env). The agent calls the proxy
-# with no credential, so the token lives in this pod only. The RemoteMCPServer has no
-# headers for the same reason: kagent would copy them into the agent's config.
+# pull request through it. github-mcp-server (http mode, only the four tools below) wants a
+# GitHub token on every request and refuses one without it. This namespace holds no token.
+# The RemoteMCPServer's Authorization header comes from Secret agents/github-mcp-token (made by
+# deploy.sh from GITHUB_TOKEN in .env, value "Bearer <token>"). kagent puts only
+# __KAGENT_ENV[KAGENT_CREDENTIAL_<hash>]__ in the agent's config and the placeholder
+# kagent-credential-injected in the actor's env; Substrate's egress gateway swaps the
+# placeholder for the Secret as the request leaves the actor. So the token is never in the
+# actor, its config, or this pod's spec, and a pod with no token gets refused.
 # agent.yaml.tmpl binds create_branch, push_files and create_pull_request with requireApproval, so
 # each call the model makes pauses for the user. issue_read is not bound for the model: the
 # implement loop (agent/src/loop-github.ts) calls it, and its three fixed git calls, from code.
@@ -25,22 +27,9 @@ spec:
         - name: server
           # deploy.sh fills in GITHUB_MCP_IMAGE from platform/versions.env.
           image: "@GITHUB_MCP_IMAGE@"
-          args: ["http", "--listen-host=127.0.0.1", "--port=8082", "--tools=issue_read,create_branch,push_files,create_pull_request"]
-        - name: auth-proxy
-          # deploy.sh fills in NODE_IMAGE from platform/versions.env (the agent image's base).
-          image: "@NODE_IMAGE@"
-          command: ["node", "/srv/github-mcp-proxy.mjs"]
-          env:
-            - {name: UPSTREAM_URL, value: "http://127.0.0.1:8082"}
-            - {name: PORT, value: "8080"}
-            - name: GITHUB_TOKEN
-              valueFrom: {secretKeyRef: {name: github-mcp-token, key: token}}
+          args: ["http", "--listen-host=0.0.0.0", "--port=8080", "--tools=issue_read,create_branch,push_files,create_pull_request"]
           ports: [{containerPort: 8080}]
-          volumeMounts: [{name: src, mountPath: /srv}]
           readinessProbe: {tcpSocket: {port: 8080}, periodSeconds: 2}
-      volumes:
-        - name: src
-          configMap: {name: github-mcp-proxy}
 ---
 apiVersion: v1
 kind: Service
@@ -53,6 +42,9 @@ apiVersion: api.kagent.dev/v1alpha3
 kind: RemoteMCPServer
 metadata: {name: github-mcp, namespace: agents}
 spec:
-  description: GitHub through github-mcp-server; the token stays in its pod
+  description: GitHub through github-mcp-server; the egress gateway adds the token
   protocol: STREAMABLE_HTTP
   url: http://github-mcp.github-mcp.svc.cluster.local:8080/
+  headersFrom:
+    - name: Authorization
+      valueFrom: {type: Secret, name: github-mcp-token, key: token}
