@@ -70,4 +70,11 @@ describe("sandbox lifecycle hooks", () => {
     expect(slow.hasTimedOut).toBe(true);
     expect(quick).toEqual({ stdout: "hi\n", stderr: "", exitCode: 0 });
   });
+
+  it("the local sandbox does not call a command that printed too much a timeout", async () => {
+    const sandbox = await createLocalSandbox(join(mkdtempSync(join(tmpdir(), "hooks-")), "ws"), { execTimeoutMs: 20_000 });
+    const loud = await sandbox.exec("head -c 2000000 /dev/zero | tr '\\0' a");
+    expect(loud.exitCode).not.toBe(0);
+    expect(loud.hasTimedOut).toBeUndefined();
+  });
 });
