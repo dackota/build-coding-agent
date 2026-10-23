@@ -20,7 +20,7 @@ import { type AskUserPause, loadSession, saveSession, type SessionState, type To
 import { openMcpTools } from "./mcp-tools.ts";
 import { type ApprovalGate, createShellTool, SHELL_TOOL } from "./shell-tool.ts";
 import { createTaskTool } from "./subagents.ts";
-import { type LoadedExtension, registerExtensionTools } from "./extensions.ts";
+import { eventWrap, type LoadedExtension, registerExtensionTools } from "./extensions.ts";
 import { createToolRegistry, type ToolRegistry, type TurnContext } from "./tool-registry.ts";
 import { EVENT_KEY, type StreamEvent } from "./stream-events.ts";
 import { ChangeTracker } from "./workspace-diff.ts";
@@ -179,7 +179,9 @@ export function createExecutor(
   extensions: readonly LoadedExtension[] = [],
 ): AgentExecutor & { shutdown(): Promise<void> } {
   const model = gatewayModel(config.baseUrl, config.model);
-  const registry = createToolRegistry();
+  // Every tool the registry builds (MCP, built-in, custom) goes through the extensions' tool_call
+  // handlers; capTools wraps the result, so a block reason or handler error is capped too.
+  const registry = createToolRegistry(eventWrap(extensions));
   registerBuiltins(registry, config, opts);
   registerExtensionTools(registry, extensions);
   const sandboxes = new Map<string, Promise<Sandbox>>();

@@ -1,7 +1,8 @@
 // The turn's tools come from here: a registry of named tool factories. Built-ins register once,
 // when the executor is made; each turn builds the tools from the turn context. The registry
 // keeps every registered name, built this turn or not, so a later check can refuse a reserved
-// name. `wrap` is applied to each tool as it is built (identity until the event wrapper).
+// name. `wrap` is applied to each tool as it is built, MCP tools included (the executor passes
+// the extensions' lifecycle event wrapper).
 import { AsyncLocalStorage } from "node:async_hooks";
 import { asSchema, type Tool } from "ai";
 import type { Sandbox } from "./sandbox.ts";
@@ -75,7 +76,9 @@ export function createToolRegistry(wrap: ToolWrap = (_name, tool) => tool): Tool
         const wrapped = wrap(name, t);
         built.set(name, customNames.has(name) ? withCallScope(wrapped, running) : wrapped);
       }
-      const external = Object.entries(mcpTools).filter(([name]) => !factories.has(name));
+      const external = Object.entries(mcpTools)
+        .filter(([name]) => !factories.has(name))
+        .map(([name, t]) => [name, wrap(name, t)] as const);
       return Object.fromEntries([...external, ...built]);
     },
   };

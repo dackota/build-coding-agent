@@ -45,7 +45,7 @@ it("lets a factory read a tool built earlier this turn through built(name)", () 
   expect(tools.c?.description).toBe("c sees nothing");
 });
 
-it("applies wrap to each tool as it is built, and built(name) returns the wrapped tool", () => {
+it("applies wrap to each tool as it is built (MCP tools too), and built(name) returns the wrapped tool", () => {
   const wrap = (name: string, t: Tool): Tool => ({ ...t, description: `wrapped ${name}:${t.description}` });
   const reg = createToolRegistry(wrap);
   reg.register("a", () => mk("a"));
@@ -53,7 +53,8 @@ it("applies wrap to each tool as it is built, and built(name) returns the wrappe
   const tools = reg.build(ctx(), { m: mk("m") });
   expect(tools.a?.description).toBe("wrapped a:a");
   expect(tools.b?.description).toBe("wrapped b:b saw wrapped a:a");
-  expect(tools.m?.description).toBe("m");
+  // MCP tools go through the same wrap, so lifecycle events fire for them too.
+  expect(tools.m?.description).toBe("wrapped m:m");
 });
 
 it("refuses to register a name twice", () => {
