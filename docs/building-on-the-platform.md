@@ -214,9 +214,12 @@ handles it. Our `agent/` already does:
 - **Skills:** kagent does not pass them at all. Our agent reads `skills/` from the workspace.
 - **Human-in-the-loop:** the image must send kagent's HITL pause and read the answer.
 
-## Does not work on alpha17
+## Not supported yet on alpha17
 
-- **One agent calling another agent over A2A.** Does not work on alpha17: `AgentTemplate`
-  has no agent-as-tool field, and an agent's actor may not call `invoke_session` on another
-  session. Have one agent tell the user which agent and command to run instead. Details and
-  what to retest on a new kagent: [ADR 0003](decisions/0003-a2a-and-stock-runtime.md).
+- **One agent calling another agent over A2A.** kagent has not built this yet. A2A itself
+  works for a user. The gaps: `AgentTemplate` has no agent-as-tool field (kagent comments
+  out `agentRef` in `go/api/v1alpha3/agenttemplate_types.go` as "Deferred until Dedicated
+  subagents can create and invoke their own Session"), and an agent's actor may not call
+  `invoke_session` on another session. Have one agent tell the user which agent and command
+  to run instead. Details and what to retest on a new kagent:
+  [ADR 0003](decisions/0003-a2a-and-stock-runtime.md).
