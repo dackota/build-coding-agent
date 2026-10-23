@@ -27,3 +27,7 @@ _Avoid_: hook (the `Sandbox` lifecycle hooks `afterStart`, `beforeStop`, `onTime
 **Block**:
 A `tool_call` handler's refusal of one call, with a reason the model gets as the tool result; the tool does not run.
 _Avoid_: deny (that is a user's approval answer), veto
+
+**Modify**:
+A handler's replacement of a tool call's input (`tool_call`, checked again against the tool's input schema) or of its output (`tool_result`); later handlers, the tool, and the model see the replacement.
+_Avoid_: rewrite, patch, transform

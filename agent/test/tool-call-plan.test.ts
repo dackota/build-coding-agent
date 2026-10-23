@@ -23,11 +23,12 @@ const action = fc.oneof(
   fc.constant("pass"),
   fc.constant("throw"),
   fc.stringMatching(/^[a-z0-9]{1,8}$/).map((w) => `block-${w}`),
+  fc.stringMatching(/^[a-z0-9]{1,8}$/).map((w) => `mod-${w}`),
 );
 const plans = fc.sample(fc.tuple(action, action, action), { numRuns: PLANS, seed: SEED });
 const pathOf = (i: number, plan: readonly string[]) => `p${i}--${plan.join("--")}.txt`;
 
-it("the first handler that does not pass decides, for 50 generated plans", { timeout: 180_000 }, async () => {
+it("the first handler that blocks or throws decides, and the last modify sets the content, for 50 generated plans", { timeout: 180_000 }, async () => {
   const script: ScriptedReply[] = plans.flatMap((plan, i) => [{ toolCall: { name: "write_file", args: { path: pathOf(i, plan), content: ORIG } } }, "ok"]);
   model = await startFakeModel(script);
   const dataDir = mkdtempSync(join(tmpdir(), "agent-data-"));
@@ -39,11 +40,13 @@ it("the first handler that does not pass decides, for 50 generated plans", { tim
     await sendTaskWhenUp(agent.grpcPort, `plan ${i}`, {}, contextId);
     const result = toolResults(model).join("\n");
     const file = join(dataDir, "workspaces", contextId, pathOf(i, plan));
-    const k = plan.findIndex((a) => a !== "pass");
+    const k = plan.findIndex((a) => a === "throw" || a.startsWith("block-"));
     const decider = plan[k];
     if (decider === undefined) {
+      const content = plan.filter((a) => a.startsWith("mod-")).at(-1)?.slice("mod-".length) ?? ORIG;
       expect(existsSync(file), `plan ${i} ${plan.join(",")}`).toBe(true);
-      expect(readFileSync(file, "utf8")).toBe(ORIG);
+      expect(readFileSync(file, "utf8")).toBe(content);
+      expect(result).toBe(`wrote ${content.length} characters to ${pathOf(i, plan)}`);
     } else if (decider === "throw") {
       expect(result, `plan ${i} ${plan.join(",")}`).toContain(`extension h${k + 1} failed on tool_call`);
       expect(existsSync(file)).toBe(false);
