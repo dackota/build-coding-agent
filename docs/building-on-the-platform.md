@@ -57,7 +57,8 @@ stock agent handed text to the subagent and returned its reply.
 
 ## Recipe 2: a new agent on our image
 
-**Tested:** no. We have run only one Agent on `hello-harness`.
+**Tested:** yes. `docs-agent` runs on `hello-harness` next to `hello-agent`, each with its own
+sessions (`platform/docs-agent.yaml`, applied by `make deploy`).
 
 Reuse `hello-harness` with a new template. You get every feature of `agent/`: file tools,
 `bash` with approvals, subagents, extensions, `/implement`.

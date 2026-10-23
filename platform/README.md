@@ -45,6 +45,7 @@ written to disk, or put on a command line.
 | `kagent-values.yaml` | kagent chart values. Points the model at the gateway. |
 | `gateway.yaml` | The Gateway, the OpenCode Go backend, and the `/v1` route. |
 | `stock-agent.yaml` | kagent's built-in agent, used by `make smoke` and `make status`. |
+| `docs-agent.yaml` | `docs-agent`: AgentTemplate and Agent on `hello-harness` (Recipe 2). |
 | `agent.yaml.tmpl` | Our agent: Harness, ModelConfigs, AgentTemplates (`hello-agent` and the `explorer`, `executor`, `reviewer` subagents), and Agent `hello-agent`. `deploy.sh` fills in `@IMAGE@`. |
 | `github-mcp.yaml` | GitHub's MCP server with only `issue_read`, `create_branch`, `push_files`, `create_pull_request`, behind the auth proxy. |
 | `github-mcp-proxy.mjs` | The auth proxy. Adds the token to every request and drops any `Authorization` a caller sends. |

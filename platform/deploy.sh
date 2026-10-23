@@ -64,4 +64,7 @@ deploy_github_mcp
 k apply -f "$PLATFORM_DIR/egress.yaml"
 sed "s|@IMAGE@|$image|" "$PLATFORM_DIR/agent.yaml.tmpl" | k apply -f -
 k wait --for=condition=Ready "agent/$AGENT" -n "$KAGENT_NS" --timeout="$READY_TIMEOUT"
+# docs-agent: a second Agent on the same hello-harness (platform/docs-agent.yaml).
+k apply -f "$PLATFORM_DIR/docs-agent.yaml"
+k wait --for=condition=Ready agent/docs-agent -n "$KAGENT_NS" --timeout="$READY_TIMEOUT"
 echo "ok   Agent $AGENT is ready with $image"

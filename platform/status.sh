@@ -75,6 +75,15 @@ check_agent() {
   else flunk "stock agent stock-agent not Ready (saw: $(first_line "$ready"))"; fi
 }
 
+# docs-agent (platform/docs-agent.yaml) is applied by make deploy.
+check_docs_agent() {
+  local ready
+  ready="$(k get agent docs-agent -n "$KAGENT_NS" \
+    -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}' 2>&1 || true)"
+  if [ "$ready" = True ]; then pass "docs-agent Ready"
+  else flunk "docs-agent not Ready (saw: $(first_line "$ready"))"; fi
+}
+
 # Every image (containers and init containers) in the platform namespaces must be one
 # of the pinned digests. imageID is the digest the node actually pulled.
 IMAGE_IDS='{range .items[*].status.containerStatuses[*]}{.imageID}{"\n"}{end}{range .items[*].status.initContainerStatuses[*]}{.imageID}{"\n"}{end}'
@@ -103,5 +112,6 @@ check_part "kagent" "kagent-crds kagent" "$KAGENT_NS"
 check_part "agentgateway" "agentgateway-crds agentgateway" "$AGW_NS"
 check_gateway
 check_agent
+check_docs_agent
 check_images
 exit "$failed"
