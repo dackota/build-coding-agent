@@ -168,6 +168,8 @@ describe("/implement on a ready issue", () => {
     // The explorer saw the issue, comments included; the main model was never called.
     const explorerRequest = model!.requests.map((r) => r.body).find((b) => b.includes("cheap-model"))!;
     expect(explorerRequest).toContain("SENTINEL-ISSUE-COMMENT");
+    // A ready issue skips the plan step.
+    expect(loopLines().map((l) => l.step)).not.toContain("plan");
   });
 
   it("shows the exact commands, branch and repo in the start approval", async () => {
@@ -244,17 +246,6 @@ describe("/implement on a ready issue", () => {
 });
 
 describe("/implement that parks", () => {
-  it("parks a not-ready issue with the reason", async () => {
-    const { contextId } = await boot(['{"ready": false, "reason": "no acceptance criteria"}']);
-
-    const got = await turn({ text: IMPLEMENT, contextId });
-
-    expect(got.state).toBe(TaskState.TASK_STATE_COMPLETED);
-    expect(got.text).toMatch(/parked/i);
-    expect(got.text).toContain("no acceptance criteria");
-    expect(calledTools()).not.toContain("create_branch");
-  });
-
   it("parks a repo with no test command", async () => {
     const { contextId } = await boot([READY], { files: { "README.md": "# widgets\n" } });
 
@@ -578,5 +569,88 @@ describe("two-axis review", () => {
     expect(prompts[0]).toContain('"name":"read_file"');
     expect(prompts[1]).toMatch(/write_file/);
     expect(agent!.output()).toMatch(/"event":"subagent-tool-error".*"agent":"reviewer".*"tool":"write_file"/);
+  });
+});
+
+const NOT_READY = '{"ready": false, "reason": "no acceptance criteria"}';
+const planReply = (plan: string, tooBig = false): ScriptedReply => JSON.stringify({ tooBig, reason: tooBig ? "three features in one issue" : "", plan });
+const PLAN_ONE = planReply("PLAN-ONE: add feature.txt. Acceptance: test.sh passes. Seams: the file. Proof: run test.sh.");
+/** The explorer subagent's request bodies, in order. */
+const explorerBodies = () => model!.requests.map((r) => r.body).filter((b) => b.includes("cheap-model"));
+const answerPlan = (paused: Turn, contextId: string, answer: string) =>
+  turn({ text: answer, taskId: paused.taskId, contextId, answer: { id: paused.request!.id, answers: [[answer]] } });
+
+describe("/implement on a thin issue", () => {
+  it("pauses for plan sign-off showing the plan, then builds the approved plan to a pull request", async () => {
+    const { contextId } = await boot([NOT_READY, PLAN_ONE, ...TESTS_STEP, ...CODE_STEP, ...CLEAN_REVIEWS]);
+
+    const asking = await turn({ text: IMPLEMENT, contextId });
+
+    expect(asking.state).toBe(TaskState.TASK_STATE_INPUT_REQUIRED);
+    expect(asking.request!.questions[0]!.question).toContain("PLAN-ONE");
+    expect(asking.request!.questions[0]!.choices[0]).toBe("approve");
+    expect(calledTools()).not.toContain("create_branch");
+    const starting = await answerPlan(asking, contextId, "approve");
+    expect(starting.state).toBe(TaskState.TASK_STATE_INPUT_REQUIRED);
+    expect(starting.approvalRequest).toBeDefined();
+    const done = await approve(starting, contextId);
+
+    expect(done.text).toBe(PR_URL);
+    expect(calledTools().filter((n) => n === "create_pull_request")).toHaveLength(1);
+    expect(reviewerBodies()[0]).toContain("PLAN-ONE");
+    for (const body of executorBodies()) expect(body).toContain("PLAN-ONE");
+    expect(loopLines().map((l) => l.step)).toContain("plan");
+  });
+
+  it("makes a new plan whose explorer prompt holds the changes text", async () => {
+    const { contextId } = await boot([NOT_READY, PLAN_ONE, planReply("PLAN-TWO: with a map")]);
+    const asking = await turn({ text: IMPLEMENT, contextId });
+
+    const again = await answerPlan(asking, contextId, "changes: SENTINEL-CHANGES use a map");
+
+    expect(again.state).toBe(TaskState.TASK_STATE_INPUT_REQUIRED);
+    expect(again.request!.questions[0]!.question).toContain("PLAN-TWO");
+    expect(explorerBodies().at(-1)).toContain("SENTINEL-CHANGES use a map");
+    expect(agent!.output()).not.toContain("SENTINEL-CHANGES");
+  });
+
+  it("parks on the third changes answer", async () => {
+    const { contextId } = await boot([NOT_READY, PLAN_ONE, planReply("PLAN-TWO"), planReply("PLAN-THREE")]);
+    let paused = await turn({ text: IMPLEMENT, contextId });
+    paused = await answerPlan(paused, contextId, "changes: one");
+    paused = await answerPlan(paused, contextId, "changes: two");
+    expect(paused.state).toBe(TaskState.TASK_STATE_INPUT_REQUIRED);
+
+    const got = await answerPlan(paused, contextId, "changes: three");
+
+    expect(got.state).toBe(TaskState.TASK_STATE_COMPLETED);
+    expect(got.text).toMatch(/parked/i);
+    expect(got.text).toMatch(/plan/i);
+    expect(calledTools()).not.toContain("create_branch");
+  });
+
+  it("parks a plan marked too big with split this issue and asks for no start approval", async () => {
+    const { contextId } = await boot([NOT_READY, planReply("HUGE", true)]);
+
+    const got = await turn({ text: IMPLEMENT, contextId });
+
+    expect(got.state).toBe(TaskState.TASK_STATE_COMPLETED);
+    expect(got.approvalRequest).toBeUndefined();
+    expect(got.text).toMatch(/split this issue/);
+  });
+
+  it("resumes the plan pause with the answer after a cold wake", async () => {
+    const booted = await boot([NOT_READY, PLAN_ONE, ...TESTS_STEP, ...CODE_STEP, ...CLEAN_REVIEWS]);
+    const { contextId } = booted;
+    const asking = await turn({ text: IMPLEMENT, contextId });
+
+    await booted.restart();
+    const waiting = await turn({ text: "still there?", taskId: asking.taskId, contextId });
+    const starting = await answerPlan(asking, contextId, "approve");
+    const done = await approve(starting, contextId);
+
+    expect(waiting.state).toBe(TaskState.TASK_STATE_INPUT_REQUIRED);
+    expect(waiting.request!.id).toBe(asking.request!.id);
+    expect(done.text).toBe(PR_URL);
   });
 });

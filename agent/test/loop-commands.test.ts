@@ -23,6 +23,12 @@ describe("finding the setup and test commands", () => {
     expect(findCommands({ agentsMd, packageJson: pkg({ test: "node --test" }), files: ["package.json"] })).toEqual({ setup: "make deps", test: "make check" });
   });
 
+  it("takes commands the approved plan names before AGENTS.md", () => {
+    const plan = "Proof:\n- Test: `make plan-check`\n";
+    const agentsMd = "- Setup: `make deps`\n- Test: `make check`\n";
+    expect(findCommands({ plan, agentsMd, files: [] })).toEqual({ setup: "make deps", test: "make plan-check" });
+  });
+
   it("finds no test command when none is named, and ignores npm's placeholder script", () => {
     expect(findCommands({ files: ["README.md"] })).toEqual({ setup: undefined, test: undefined });
     expect(findCommands({ packageJson: pkg({ test: 'echo "Error: no test specified" && exit 1' }), files: ["package.json"] }).test).toBeUndefined();

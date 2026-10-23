@@ -4,13 +4,15 @@ import { type Action, actionFor, begin, branchName, canContinue, isLockfile, isT
 
 const TARGET = { owner: "acme", repo: "widgets", number: 12 };
 const ISSUE = { title: "Add a farewell function", body: "Say goodbye.", comments: [] as string[] };
-const ACTION_KINDS = ["read", "ready-check", "commands", "approve", "setup", "build-tests", "build-code", "test", "review", "pr-branch", "pr-push", "pr-open", "finish", "park", "noop"];
+const ACTION_KINDS = ["read", "ready-check", "plan", "signoff", "commands", "approve", "setup", "build-tests", "build-code", "test", "review", "pr-branch", "pr-push", "pr-open", "finish", "park", "noop"];
 
 const text = fc.string({ maxLength: 40 });
 const findingArb = fc.record({ severity: fc.constantFrom("CRITICAL", "HIGH", "MEDIUM", "LOW"), file: text, reason: text });
 const eventArb: fc.Arbitrary<LoopEvent> = fc.oneof(
   fc.record({ type: fc.constant("read" as const), issue: fc.record({ title: text, body: text, comments: fc.array(text, { maxLength: 3 }) }), baseBranch: text }),
   fc.record({ type: fc.constant("ready" as const), ready: fc.boolean(), reason: text }),
+  fc.record({ type: fc.constant("planned" as const), plan: text, tooBig: fc.boolean(), reason: text }),
+  fc.record({ type: fc.constant("signoff" as const), approved: fc.boolean(), changes: fc.option(text, { nil: undefined }) }),
   fc.record({ type: fc.constant("commands" as const), setup: fc.option(text, { nil: undefined }), test: fc.option(text, { nil: undefined }) }),
   fc.record({ type: fc.constant("approval" as const), approved: fc.boolean(), reason: fc.option(text, { nil: undefined }) }),
   fc.record({ type: fc.constant("setup" as const), ok: fc.boolean(), output: text, timedOut: fc.option(fc.boolean(), { nil: undefined }) }),
@@ -30,6 +32,8 @@ function eventFor(action: Action, ok: boolean, words: string): LoopEvent | undef
   switch (action.kind) {
     case "read": return { type: "read", issue: ISSUE, baseBranch: "main" };
     case "ready-check": return { type: "ready", ready: ok, reason: words };
+    case "plan": return { type: "planned", plan: words, tooBig: false, reason: words };
+    case "signoff": return { type: "signoff", approved: ok, ...(ok ? {} : { changes: words || "change it" }) };
     case "commands": return { type: "commands", setup: ok ? "npm ci" : undefined, test: "npm test" };
     case "approve": return { type: "approval", approved: ok, reason: words };
     case "setup": return { type: "setup", ok, output: words };
@@ -105,12 +109,9 @@ describe("the loop step machine", () => {
     expect(actionFor(got.state)).toEqual(got.action);
   });
 
-  it("parks a not-ready issue with the reason, and a missing test command", () => {
+  it("parks a missing test command", () => {
     let { state } = begin(TARGET);
     ({ state } = next(state, { type: "read", issue: ISSUE, baseBranch: "main" }));
-    const notReady = next(state, { type: "ready", ready: false, reason: "no criteria" });
-    expect(notReady.action.kind).toBe("park");
-    expect(notReady.state.reason).toContain("no criteria");
     const { state: ready } = next(state, { type: "ready", ready: true, reason: "ok" });
     const noTest = next(ready, { type: "commands", setup: "npm ci", test: undefined });
     expect(noTest.action.kind).toBe("park");
@@ -161,6 +162,23 @@ describe("the loop step machine", () => {
     );
   });
 
+  it("never starts build-tests on a not-ready issue without an approved plan", () => {
+    fc.assert(
+      fc.property(seedsArb, (seeds) => {
+        const trace = drive(seeds);
+        trace.forEach((t, i) => {
+          if (t.after.step !== "build-tests" || t.before.step === "build-tests") return;
+          const earlier = trace.slice(0, i);
+          const notReady = earlier.some((x) => x.before.step === "ready-check" && x.event.type === "ready" && !x.event.ready && x.after.step !== "parked");
+          if (!notReady) return;
+          expect(earlier.some((x) => x.before.step === "plan-signoff" && x.event.type === "signoff" && x.event.approved && x.after.step === "commands")).toBe(true);
+          expect(t.after.plan).toBeDefined();
+        });
+      }),
+      { numRuns: 500 },
+    );
+  });
+
   it("gives a legal action or parked for any event in any state", () => {
     fc.assert(
       fc.property(seedsArb, eventArb, (seeds, event) => {
@@ -196,6 +214,49 @@ describe("the loop step machine", () => {
     const again = next(state, { type: "read", issue: ISSUE, baseBranch: "main" });
     expect(again.state).toEqual(state);
     expect(again.action.kind).toBe("park");
+  });
+});
+
+const TO_PLAN: LoopEvent[] = [
+  { type: "read", issue: ISSUE, baseBranch: "main" },
+  { type: "ready", ready: false, reason: "no criteria" },
+];
+const PLANNED: LoopEvent = { type: "planned", plan: "PLAN-ONE", tooBig: false };
+const CHANGES = (text: string): LoopEvent => ({ type: "signoff", approved: false, changes: text });
+
+describe("the plan path", () => {
+  it("sends a not-ready issue to the plan step, then to the sign-off with the plan", () => {
+    const planning = runTo(TO_PLAN);
+    expect(planning.state.step).toBe("plan");
+    expect(planning.action).toEqual({ kind: "plan" });
+    const asking = next(planning.state, PLANNED);
+    expect(asking.action).toEqual({ kind: "signoff", plan: "PLAN-ONE" });
+    expect(actionFor(asking.state)).toEqual(asking.action);
+  });
+
+  it("goes to the commands step with the plan saved when the plan is approved", () => {
+    const got = runTo([...TO_PLAN, PLANNED, { type: "signoff", approved: true }]);
+    expect(got.action.kind).toBe("commands");
+    expect(got.state.plan).toBe("PLAN-ONE");
+  });
+
+  it("parks a plan marked too big with split this issue", () => {
+    const got = runTo([...TO_PLAN, { type: "planned", plan: "huge", tooBig: true, reason: "three features" }]);
+    expect(got.action.kind).toBe("park");
+    expect(got.state.reason).toMatch(/split this issue/);
+    expect(canContinue(got.state)).toBe(false);
+  });
+
+  it("makes a new plan with the changes text twice and parks on the third changes answer", () => {
+    const first = runTo([...TO_PLAN, PLANNED, CHANGES("use a map")]);
+    expect(first.action).toEqual({ kind: "plan" });
+    expect(first.state.planChanges).toBe("use a map");
+    const second = runTo([...TO_PLAN, PLANNED, CHANGES("use a map"), PLANNED, CHANGES("and a log")]);
+    expect(second.action.kind).toBe("plan");
+    expect(second.state.planChanges).toBe("and a log");
+    const third = runTo([...TO_PLAN, PLANNED, CHANGES("a"), PLANNED, CHANGES("b"), PLANNED, CHANGES("c")]);
+    expect(third.action.kind).toBe("park");
+    expect(third.state.reason).toMatch(/plan/);
   });
 });
 
@@ -309,7 +370,7 @@ describe("test-first build", () => {
   });
 
   it("cannot continue a run that parked before the build", () => {
-    const parked = runTo([{ type: "read", issue: ISSUE, baseBranch: "main" }, { type: "ready", ready: false, reason: "thin" }]);
+    const parked = runTo([{ type: "read", issue: ISSUE, baseBranch: "main" }, { type: "failed", code: "x", reason: "boom" }]);
     expect(canContinue(parked.state)).toBe(false);
     expect(next(parked.state, { type: "continue" }).state).toEqual(parked.state);
   });

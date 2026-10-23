@@ -2,6 +2,8 @@
 // and the lockfiles imply. Pure: the caller reads the files.
 
 export type CommandSources = {
+  /** The approved plan, which may name the commands. It wins over AGENTS.md. */
+  plan?: string | undefined;
   agentsMd?: string | undefined;
   packageJson?: string | undefined;
   /** The names of the files at the repo root. */
@@ -50,7 +52,7 @@ export function findCommands(sources: CommandSources): Commands {
   const hasTestScript = typeof script === "string" && script.trim() !== "" && !NPM_PLACEHOLDER.test(script);
   const impliedTest = hasTestScript ? `${packageManager(sources.files)} test` : undefined;
   return {
-    setup: fromAgentsMd(sources.agentsMd, "setup|install") ?? installFor(manifest, sources.files),
-    test: fromAgentsMd(sources.agentsMd, "tests?") ?? impliedTest,
+    setup: fromAgentsMd(sources.plan, "setup|install") ?? fromAgentsMd(sources.agentsMd, "setup|install") ?? installFor(manifest, sources.files),
+    test: fromAgentsMd(sources.plan, "tests?") ?? fromAgentsMd(sources.agentsMd, "tests?") ?? impliedTest,
   };
 }

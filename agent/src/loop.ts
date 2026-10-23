@@ -4,7 +4,7 @@
 // repeated and no sequence of events can throw.
 import { z } from "zod";
 
-export const STEPS = ["read", "ready-check", "commands", "approve", "setup", "build-tests", "check-red", "build-code", "check-green", "review-spec", "review-standards", "pr", "done", "parked", "stopped"] as const;
+export const STEPS = ["read", "ready-check", "plan", "plan-signoff", "commands", "approve", "setup", "build-tests", "check-red", "build-code", "check-green", "review-spec", "review-standards", "pr", "done", "parked", "stopped"] as const;
 export type Step = (typeof STEPS)[number];
 
 export const SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const;
@@ -35,6 +35,15 @@ export const loopStateSchema = z.object({
   /** Build and check share this counter, 1-based, never past `cap`. */
   round: z.number().int(),
   cap: z.number().int().default(ROUND_CAP),
+  /** The approved plan: one ticket, with acceptance criteria, seams and a proof line. Set only after sign-off. */
+  plan: z.string().optional(),
+  /** Why the ready check failed, for the plan prompt. */
+  readyReason: z.string().optional(),
+  /** The plan under review at the sign-off, and the user's last "changes" text for the next plan. */
+  draftPlan: z.string().optional(),
+  planChanges: z.string().optional(),
+  /** How many times the user answered the plan pause with changes. */
+  planRevisions: z.number().int().default(0),
   /** What the next executor prompt must say: why the last step went back. */
   feedback: z.string().optional(),
   /** The user's note from `/implement continue <note>`, for every executor prompt after it. */
@@ -67,6 +76,8 @@ export type LoopState = z.infer<typeof loopStateSchema>;
 export type LoopEvent =
   | { type: "read"; issue: Issue; baseBranch: string }
   | { type: "ready"; ready: boolean; reason: string }
+  | { type: "planned"; plan: string; tooBig: boolean; reason?: string | undefined }
+  | { type: "signoff"; approved: boolean; changes?: string | undefined }
   | { type: "commands"; setup: string | undefined; test: string | undefined }
   | { type: "approval"; approved: boolean; reason?: string | undefined }
   | { type: "setup"; ok: boolean; output: string; timedOut?: boolean | undefined }
@@ -83,6 +94,8 @@ export type LoopEvent =
 export type Action =
   | { kind: "read" }
   | { kind: "ready-check" }
+  | { kind: "plan" }
+  | { kind: "signoff"; plan: string }
   | { kind: "commands" }
   | { kind: "approve"; setup: string | undefined; test: string; branch: string; repo: string }
   | { kind: "setup" }
@@ -167,6 +180,8 @@ export function actionFor(state: LoopState): Action {
   switch (state.step) {
     case "read": return { kind: "read" };
     case "ready-check": return { kind: "ready-check" };
+    case "plan": return { kind: "plan" };
+    case "plan-signoff": return { kind: "signoff", plan: state.draftPlan ?? "" };
     case "commands": return { kind: "commands" };
     case "approve":
       return { kind: "approve", setup: state.commands?.setup, test: state.commands?.test ?? "", branch: state.branch ?? "", repo: `${state.target.owner}/${state.target.repo}` };
@@ -190,7 +205,7 @@ const park = (state: LoopState, code: string, reason: string): Next => result({ 
 
 /** A run on `target`, at its first step. */
 export function begin(target: Target): Next {
-  return result({ step: "read", round: 1, cap: ROUND_CAP, target, prStage: 0 });
+  return result({ step: "read", round: 1, cap: ROUND_CAP, target, prStage: 0, planRevisions: 0 });
 }
 
 /** True while a run is still going: not finished, parked or stopped. */
@@ -262,6 +277,20 @@ function afterApproval(state: LoopState, event: Extract<LoopEvent, { type: "appr
   return state.commands?.setup ? move(state, "setup") : move(state, "build-tests");
 }
 
+/** Changes the user may ask for before the run parks: the third "changes" answer parks. */
+export const MAX_PLAN_REVISIONS = 2;
+
+function afterPlanned(state: LoopState, event: Extract<LoopEvent, { type: "planned" }>): Next {
+  if (event.tooBig) return park(state, "plan-too-big", `split this issue: the plan is too big for one ticket${event.reason ? ` (${event.reason})` : ""}`);
+  return move(state, "plan-signoff", { draftPlan: event.plan });
+}
+
+function afterSignoff(state: LoopState, event: Extract<LoopEvent, { type: "signoff" }>): Next {
+  if (event.approved) return move(state, "commands", { plan: state.draftPlan, planChanges: undefined });
+  if (state.planRevisions >= MAX_PLAN_REVISIONS) return park(state, "plan-changes", `the plan was sent back for changes ${MAX_PLAN_REVISIONS + 1} times; no plan was approved`);
+  return move(state, "plan", { planRevisions: state.planRevisions + 1, planChanges: event.changes ?? "" });
+}
+
 function afterCommands(state: LoopState, event: Extract<LoopEvent, { type: "commands" }>): Next {
   if (!event.test) return park(state, "no-test-command", "no test command found (AGENTS.md or package.json); the loop never builds with no gate");
   const branch = branchName(state.target.number, state.issue?.title ?? "");
@@ -276,8 +305,10 @@ export function next(state: LoopState, event: LoopEvent): Next {
   if (event.type === "failed") return park(state, event.code, event.reason);
   if (state.step === "read" && event.type === "read") return move(state, "ready-check", { issue: event.issue, baseBranch: event.baseBranch });
   if (state.step === "ready-check" && event.type === "ready") {
-    return event.ready ? move(state, "commands") : park(state, "not-ready", `the issue is not ready to build: ${event.reason}`);
+    return event.ready ? move(state, "commands") : move(state, "plan", { readyReason: event.reason });
   }
+  if (state.step === "plan" && event.type === "planned") return afterPlanned(state, event);
+  if (state.step === "plan-signoff" && event.type === "signoff") return afterSignoff(state, event);
   if (state.step === "commands" && event.type === "commands") return afterCommands(state, event);
   if (state.step === "approve" && event.type === "approval") return afterApproval(state, event);
   if (state.step === "setup" && event.type === "setup") {

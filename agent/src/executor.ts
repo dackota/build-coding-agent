@@ -302,6 +302,7 @@ export function createExecutor(
     const io = {
       progress: (event: StreamEvent) => publishProgress(bus, taskId, contextId, event),
       pause: (pause: ToolApprovalPause) => publishApprovalPause(bus, taskId, contextId, pause),
+      ask: (pause: AskUserPause) => publishPause(bus, taskId, contextId, pause.requestId, pause.questions),
       reply: async (text: string) => {
         publishArtifact(bus, taskId, contextId, "reply", textPart(text));
         publishStatus(bus, taskId, contextId, TaskState.TASK_STATE_COMPLETED);

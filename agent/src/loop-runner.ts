@@ -8,13 +8,13 @@ import type { Message } from "@a2a-js/sdk";
 import type { Tool } from "ai";
 import { z } from "zod";
 import type { SubAgentDef } from "./config.ts";
-import { parseToolApprovalResponse } from "./hitl.ts";
+import { parseAskUserResponse, parseToolApprovalResponse } from "./hitl.ts";
 import { type Action, type Axis, begin, canContinue, findingLines, isBlocking, isHeld, isTestFile, type Issue, type LoopEvent, type LoopState, type Next, next, parseImplementCommand, ROUND_CAP, reviewSchema, type Target } from "./loop.ts";
 import { findCommands } from "./loop-commands.ts";
 import { type Github, openGithub } from "./loop-github.ts";
 import { log } from "./log.ts";
 import { readIfExists, type Sandbox, shellQuote } from "./sandbox.ts";
-import { saveSession, type SessionState, type ToolApprovalPause } from "./session-state.ts";
+import { type AskUserPause, saveSession, type SessionState, type ToolApprovalPause } from "./session-state.ts";
 import type { StreamEvent } from "./stream-events.ts";
 import { runSubAgent } from "./subagents.ts";
 import { ChangeTracker } from "./workspace-diff.ts";
@@ -47,10 +47,16 @@ export type LoopIo = {
   progress(event: StreamEvent): void;
   /** Publishes the pause (INPUT_REQUIRED); the runner has saved it. */
   pause(pause: ToolApprovalPause): void;
+  /** Publishes the plan sign-off question (INPUT_REQUIRED); the runner has saved it. */
+  ask(pause: AskUserPause): void;
   /** The run's reply: the task completes with this text. */
   reply(text: string): Promise<void>;
 };
 
+const PLAN_CALL_ID = "implement-plan";
+const APPROVE = "approve";
+const CHANGES = "changes";
+const planAnswer = z.object({ tooBig: z.boolean(), reason: z.string().default(""), plan: z.string() });
 const readyAnswer = z.object({ ready: z.boolean(), reason: z.string() });
 
 function startHint(action: Extract<Action, { kind: "approve" }>, number: number): string {
@@ -76,11 +82,23 @@ function startPause(taskId: string, action: Extract<Action, { kind: "approve" }>
   };
 }
 
+function planPause(taskId: string, plan: string): AskUserPause {
+  const question = `Here is the plan for this issue. Approve it, or send changes.\n\n${plan}\n\nChoose "${APPROVE}", or answer with your changes (for example "${CHANGES}: use a map").`;
+  return { kind: "ask_user", taskId, requestId: randomUUID(), toolCallId: PLAN_CALL_ID, questions: [{ question, choices: [APPROVE, CHANGES], multiple: false }], messages: [] };
+}
+
 const issueText = (target: Target, issue: Issue): string =>
   `GitHub issue ${target.owner}/${target.repo}#${target.number}: ${issue.title}\n\n${issue.body}\n${issue.comments.length > 0 ? `\nComments:\n${issue.comments.map((c) => `- ${c}`).join("\n")}\n` : ""}`;
 
 function readyPrompt(target: Target, issue: Issue, previousError?: string): string {
   return `Decide whether this GitHub issue is ready to build. It is ready when it says what to build and has testable acceptance criteria. You may read the repository (read_file, search) to check. Reply with only a JSON object: {"ready": true or false, "reason": "one sentence"}.${previousError ? `\n\nYour last reply was not valid (${previousError}). Reply with only the JSON object.` : ""}\n\n${issueText(target, issue)}`;
+}
+
+function planPrompt(target: Target, issue: Issue, state: LoopState, previousError?: string): string {
+  const revise = state.planChanges !== undefined && state.draftPlan ? `\n\nYour last plan was:\n${state.draftPlan}\n\nThe user asked for these changes. Write a new plan that makes them:\n${state.planChanges}` : "";
+  const why = state.readyReason ? ` The issue is not ready to build: ${state.readyReason}.` : "";
+  const retry = previousError ? `\n\nYour last reply was not valid (${previousError}). Reply with only the JSON object.` : "";
+  return `Plan the work for this GitHub issue in the repository in your workspace.${why} Read the code first (read_file, search). Write a plan for ONE ticket, one pull request: what to build, acceptance criteria that tests can check, the seams to test at, and a proof line (how to see it work). If the work is too big for one ticket, set tooBig to true. Reply with only a JSON object: {"tooBig": true or false, "reason": "one sentence", "plan": "the plan, as plain text"}.${revise}${retry}\n\n${issueText(target, issue)}`;
 }
 
 /** The JSON object in a reply (the first `{` to the last `}`), checked against the schema. */
@@ -157,10 +175,26 @@ async function readyCheck(env: LoopEnv, state: LoopState): Promise<LoopEvent> {
   return { type: "failed", code: "ready-check-invalid", reason: `the ready check did not return valid JSON (${error})` };
 }
 
-async function findProjectCommands(env: LoopEnv): Promise<LoopEvent> {
+async function planStep(env: LoopEnv, state: LoopState): Promise<LoopEvent> {
+  const deps = { fileTools: env.fileTools(new ChangeTracker()), taskId: env.taskId, opts: env.subAgentOpts };
+  let error: string | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const text = await runSubAgent(subAgent(env, "explorer"), planPrompt(state.target, state.issue!, state, error), deps);
+    try {
+      const answer = parseJsonReply(text, planAnswer);
+      return { type: "planned", plan: answer.plan, tooBig: answer.tooBig, reason: answer.reason };
+    } catch (err) {
+      error = (err as Error).message;
+    }
+  }
+  return { type: "failed", code: "plan-invalid", reason: `the plan step did not return valid JSON (${error})` };
+}
+
+async function findProjectCommands(env: LoopEnv, state: LoopState): Promise<LoopEvent> {
   const listing = await env.sandbox.exec("ls -A");
   const files = listing.stdout.split("\n").filter(Boolean);
   const commands = findCommands({
+    plan: state.plan,
     agentsMd: await readIfExists(env.sandbox, "AGENTS.md"),
     packageJson: await readIfExists(env.sandbox, "package.json"),
     files,
@@ -177,6 +211,7 @@ async function runLoopCommand(env: LoopEnv, command: string): Promise<{ ok: bool
 /** What every executor prompt carries: the issue, the user's note, the last findings and the last test output. */
 function context(state: LoopState): string {
   const parts = [issueText(state.target, state.issue!)];
+  if (state.plan) parts.push(`Approved plan:\n${state.plan}`);
   if (state.note) parts.push(`Note from the user: ${state.note}`);
   if (state.feedback) parts.push(state.feedback);
   if (state.testOutput) parts.push(`Last test output:\n${tail(state.testOutput)}`);
@@ -217,7 +252,7 @@ async function changeDiff(env: LoopEnv, files: readonly string[]): Promise<strin
 
 function reviewPrompt(axis: Axis, state: LoopState, diff: string, previousError?: string): string {
   const retry = previousError ? `\n\nYour last reply was not valid (${previousError}). Reply with only the JSON object.` : "";
-  return `You are reviewing a change to the repository in your workspace. ${axis === "spec" ? SPEC_QUESTION : STANDARDS_QUESTION} You may read the repository (read_file, search); you cannot change it. Reply with only a JSON object: {"findings": [{"severity": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW", "file": "path", "reason": "one sentence"}]}. Use CRITICAL or HIGH only for a problem that must be fixed before the change merges. An empty list means no findings.${retry}\n\n${issueText(state.target, state.issue!)}\nFiles changed: ${(state.changedFiles ?? []).join(", ")}\n\nDiff:\n${diff}`;
+  return `You are reviewing a change to the repository in your workspace. ${axis === "spec" ? SPEC_QUESTION : STANDARDS_QUESTION} You may read the repository (read_file, search); you cannot change it. Reply with only a JSON object: {"findings": [{"severity": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW", "file": "path", "reason": "one sentence"}]}. Use CRITICAL or HIGH only for a problem that must be fixed before the change merges. An empty list means no findings.${retry}\n\n${issueText(state.target, state.issue!)}${state.plan ? `\nApproved plan (the user signed this off; the spec review checks the diff against it too):\n${state.plan}\n` : ""}\nFiles changed: ${(state.changedFiles ?? []).join(", ")}\n\nDiff:\n${diff}`;
 }
 
 /** One fresh reviewer call; invalid output gets one retry with the validation error. */
@@ -248,7 +283,8 @@ async function perform(env: LoopEnv, state: LoopState, action: Action, hadPriorR
   switch (action.kind) {
     case "read": return readAndClone(env, state, hadPriorRun);
     case "ready-check": return readyCheck(env, state);
-    case "commands": return findProjectCommands(env);
+    case "plan": return planStep(env, state);
+    case "commands": return findProjectCommands(env, state);
     case "setup": return { type: "setup", ...(await runLoopCommand(env, state.commands!.setup!)) };
     case "build-tests": return build(env, state, "tests");
     case "build-code": return build(env, state, "code");
@@ -293,9 +329,10 @@ async function drive(env: LoopEnv, io: LoopIo, session: SessionState, first: Nex
   let current = first;
   for (;;) {
     const { state, action } = current;
-    const pause = action.kind === "approve" ? startPause(env.taskId, action, state.target.number) : undefined;
+    const pause = action.kind === "approve" ? startPause(env.taskId, action, state.target.number) : action.kind === "signoff" ? planPause(env.taskId, action.plan) : undefined;
     saveSession(env.dataDir, env.contextId, { ...session, loop: state, pending: pause });
-    if (pause) return io.pause(pause);
+    if (pause?.kind === "tool_approval") return io.pause(pause);
+    if (pause) return io.ask(pause);
     if (action.kind === "finish") return io.reply(state.prUrl ?? "");
     if (action.kind === "park" || action.kind === "noop") return io.reply(parkedText(state));
     if (env.signal.aborted) throw new Error("canceled");
@@ -318,6 +355,26 @@ async function resumeApproval(env: LoopEnv, io: LoopIo, session: SessionState, p
   await drive(env, io, session, after, true);
 }
 
+/** The answer to the plan pause: approve, or changes (text after an optional "changes:" prefix). Undefined when it decides nothing. */
+export function readPlanAnswer(answers: string[][]): { approved: boolean; changes?: string } | undefined {
+  const text = (answers[0] ?? []).join(" ").trim();
+  if (text === "") return undefined;
+  if (text.toLowerCase() === APPROVE) return { approved: true };
+  const changes = text.replace(/^changes\s*:?\s*/i, "").trim();
+  return { approved: false, changes: changes === "" ? text : changes };
+}
+
+/** The answer to the plan pause: go on with the run, or keep it paused when the answer does not decide it. */
+async function resumePlan(env: LoopEnv, io: LoopIo, session: SessionState, pending: AskUserPause, message: Message): Promise<void> {
+  const state = session.loop!;
+  const answer = parseAskUserResponse(message);
+  const decision = answer && answer.id === pending.requestId ? readPlanAnswer(answer.answers) : undefined;
+  if (!decision) return io.ask(pending);
+  const after = next(state, { type: "signoff", ...decision });
+  report(env, io, state, after.state);
+  await drive(env, io, session, after, true);
+}
+
 export type LoopTurn = { env: LoopEnv; io: LoopIo; session: SessionState; text: string; message: Message };
 
 /**
@@ -328,6 +385,10 @@ export async function handleLoopMessage({ env, io, session, text, message }: Loo
   const pending = session.pending?.taskId === env.taskId ? session.pending : undefined;
   if (session.loop?.step === "approve" && pending?.kind === "tool_approval" && pending.tools[0]?.name === START_TOOL) {
     await resumeApproval(env, io, session, pending, message);
+    return true;
+  }
+  if (session.loop?.step === "plan-signoff" && pending?.kind === "ask_user" && pending.toolCallId === PLAN_CALL_ID) {
+    await resumePlan(env, io, session, pending, message);
     return true;
   }
   const command = parseImplementCommand(text);
