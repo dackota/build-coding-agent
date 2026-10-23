@@ -639,6 +639,28 @@ describe("/implement on a thin issue", () => {
     expect(got.text).toMatch(/split this issue/);
   });
 
+  it("retries the ready check once with the validation error when it returns bad JSON, and goes on", async () => {
+    const { contextId } = await boot([BAD_JSON, NOT_READY, PLAN_ONE]);
+
+    const asking = await turn({ text: IMPLEMENT, contextId });
+
+    expect(asking.state).toBe(TaskState.TASK_STATE_INPUT_REQUIRED);
+    expect(asking.request!.questions[0]!.question).toContain("PLAN-ONE");
+    expect(explorerBodies()[1]).toMatch(/not valid/i);
+  });
+
+  it("parks when the plan step returns bad JSON twice, and asks nothing", async () => {
+    const { contextId } = await boot([NOT_READY, BAD_JSON, BAD_JSON]);
+
+    const got = await turn({ text: IMPLEMENT, contextId });
+
+    expect(got.state).toBe(TaskState.TASK_STATE_COMPLETED);
+    expect(got.text).toMatch(/parked/i);
+    expect(got.text).toMatch(/plan step did not return valid JSON/);
+    expect(explorerBodies()).toHaveLength(3);
+    expect(explorerBodies()[2]).toMatch(/not valid/i);
+  });
+
   it("resumes the plan pause with the answer after a cold wake", async () => {
     const booted = await boot([NOT_READY, PLAN_ONE, ...TESTS_STEP, ...CODE_STEP, ...CLEAN_REVIEWS]);
     const { contextId } = booted;

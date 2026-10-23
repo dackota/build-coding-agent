@@ -24,6 +24,8 @@ export const START_TOOL = "implement_start";
 const START_CALL_ID = "implement-start";
 const OUTPUT_TAIL_CHARS = 1500;
 const MAX_CHANGED_FILES_IN_BODY = 20;
+/** A subagent that must reply with JSON gets this many tries; each retry carries the last validation error. */
+const JSON_ATTEMPTS = 2;
 
 /** What the runner needs from the executor. */
 export type LoopEnv = {
@@ -90,14 +92,13 @@ function planPause(taskId: string, plan: string): AskUserPause {
 const issueText = (target: Target, issue: Issue): string =>
   `GitHub issue ${target.owner}/${target.repo}#${target.number}: ${issue.title}\n\n${issue.body}\n${issue.comments.length > 0 ? `\nComments:\n${issue.comments.map((c) => `- ${c}`).join("\n")}\n` : ""}`;
 
-function readyPrompt(target: Target, issue: Issue, previousError?: string): string {
-  return `Decide whether this GitHub issue is ready to build. It is ready when it says what to build and has testable acceptance criteria. You may read the repository (read_file, search) to check. Reply with only a JSON object: {"ready": true or false, "reason": "one sentence"}.${previousError ? `\n\nYour last reply was not valid (${previousError}). Reply with only the JSON object.` : ""}\n\n${issueText(target, issue)}`;
+function readyPrompt(target: Target, issue: Issue, retry: string): string {
+  return `Decide whether this GitHub issue is ready to build. It is ready when it says what to build and has testable acceptance criteria. You may read the repository (read_file, search) to check. Reply with only a JSON object: {"ready": true or false, "reason": "one sentence"}.${retry}\n\n${issueText(target, issue)}`;
 }
 
-function planPrompt(target: Target, issue: Issue, state: LoopState, previousError?: string): string {
+function planPrompt(target: Target, issue: Issue, state: LoopState, retry: string): string {
   const revise = state.planChanges !== undefined && state.draftPlan ? `\n\nYour last plan was:\n${state.draftPlan}\n\nThe user asked for these changes. Write a new plan that makes them:\n${state.planChanges}` : "";
   const why = state.readyReason ? ` The issue is not ready to build: ${state.readyReason}.` : "";
-  const retry = previousError ? `\n\nYour last reply was not valid (${previousError}). Reply with only the JSON object.` : "";
   return `Plan the work for this GitHub issue in the repository in your workspace.${why} Read the code first (read_file, search). Write a plan for ONE ticket, one pull request: what to build, acceptance criteria that tests can check, the seams to test at, and a proof line (how to see it work). If the work is too big for one ticket, set tooBig to true. Reply with only a JSON object: {"tooBig": true or false, "reason": "one sentence", "plan": "the plan, as plain text"}.${revise}${retry}\n\n${issueText(target, issue)}`;
 }
 
@@ -159,35 +160,36 @@ function subAgent(env: LoopEnv, name: string): SubAgentDef {
   return def;
 }
 
-async function readyCheck(env: LoopEnv, state: LoopState): Promise<LoopEvent> {
-  const issue = state.issue!;
+type JsonReply<T> = { ok: true; answer: T } | { ok: false; error: string };
+
+/** The sentence a retry prompt ends with: empty on the first try, else the last validation error. */
+const retryNote = (error: string | undefined): string => (error ? `\n\nYour last reply was not valid (${error}). Reply with only the JSON object.` : "");
+
+/** Asks a read-only subagent for a JSON reply; invalid output is retried with the validation error. */
+async function askJson<T>(env: LoopEnv, agent: string, schema: z.ZodType<T>, prompt: (retry: string) => string): Promise<JsonReply<T>> {
   const deps = { fileTools: env.fileTools(new ChangeTracker()), taskId: env.taskId, opts: env.subAgentOpts };
   let error: string | undefined;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const text = await runSubAgent(subAgent(env, "explorer"), readyPrompt(state.target, issue, error), deps);
+  for (let attempt = 0; attempt < JSON_ATTEMPTS; attempt++) {
+    const text = await runSubAgent(subAgent(env, agent), prompt(retryNote(error)), deps);
     try {
-      const answer = parseJsonReply(text, readyAnswer);
-      return { type: "ready", ready: answer.ready, reason: answer.reason };
+      return { ok: true, answer: parseJsonReply(text, schema) };
     } catch (err) {
       error = (err as Error).message;
     }
   }
-  return { type: "failed", code: "ready-check-invalid", reason: `the ready check did not return valid JSON (${error})` };
+  return { ok: false, error: error ?? "no reply" };
+}
+
+async function readyCheck(env: LoopEnv, state: LoopState): Promise<LoopEvent> {
+  const got = await askJson(env, "explorer", readyAnswer, (retry) => readyPrompt(state.target, state.issue!, retry));
+  if (!got.ok) return { type: "failed", code: "ready-check-invalid", reason: `the ready check did not return valid JSON (${got.error})` };
+  return { type: "ready", ready: got.answer.ready, reason: got.answer.reason };
 }
 
 async function planStep(env: LoopEnv, state: LoopState): Promise<LoopEvent> {
-  const deps = { fileTools: env.fileTools(new ChangeTracker()), taskId: env.taskId, opts: env.subAgentOpts };
-  let error: string | undefined;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const text = await runSubAgent(subAgent(env, "explorer"), planPrompt(state.target, state.issue!, state, error), deps);
-    try {
-      const answer = parseJsonReply(text, planAnswer);
-      return { type: "planned", plan: answer.plan, tooBig: answer.tooBig, reason: answer.reason };
-    } catch (err) {
-      error = (err as Error).message;
-    }
-  }
-  return { type: "failed", code: "plan-invalid", reason: `the plan step did not return valid JSON (${error})` };
+  const got = await askJson(env, "explorer", planAnswer, (retry) => planPrompt(state.target, state.issue!, state, retry));
+  if (!got.ok) return { type: "failed", code: "plan-invalid", reason: `the plan step did not return valid JSON (${got.error})` };
+  return { type: "planned", plan: got.answer.plan, tooBig: got.answer.tooBig, reason: got.answer.reason };
 }
 
 async function findProjectCommands(env: LoopEnv, state: LoopState): Promise<LoopEvent> {
@@ -250,25 +252,16 @@ async function changeDiff(env: LoopEnv, files: readonly string[]): Promise<strin
   return diff.length > MAX_DIFF_CHARS ? `${diff.slice(0, MAX_DIFF_CHARS)}\n... (diff cut; read the files for the rest)` : diff;
 }
 
-function reviewPrompt(axis: Axis, state: LoopState, diff: string, previousError?: string): string {
-  const retry = previousError ? `\n\nYour last reply was not valid (${previousError}). Reply with only the JSON object.` : "";
+function reviewPrompt(axis: Axis, state: LoopState, diff: string, retry: string): string {
   return `You are reviewing a change to the repository in your workspace. ${axis === "spec" ? SPEC_QUESTION : STANDARDS_QUESTION} You may read the repository (read_file, search); you cannot change it. Reply with only a JSON object: {"findings": [{"severity": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW", "file": "path", "reason": "one sentence"}]}. Use CRITICAL or HIGH only for a problem that must be fixed before the change merges. An empty list means no findings.${retry}\n\n${issueText(state.target, state.issue!)}${state.plan ? `\nApproved plan (the user signed this off; the spec review checks the diff against it too):\n${state.plan}\n` : ""}\nFiles changed: ${(state.changedFiles ?? []).join(", ")}\n\nDiff:\n${diff}`;
 }
 
 /** One fresh reviewer call; invalid output gets one retry with the validation error. */
 async function review(env: LoopEnv, state: LoopState, axis: Axis): Promise<LoopEvent> {
   const diff = await changeDiff(env, state.changedFiles ?? []);
-  const deps = { fileTools: env.fileTools(new ChangeTracker()), taskId: env.taskId, opts: env.subAgentOpts };
-  let error: string | undefined;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const text = await runSubAgent(subAgent(env, "reviewer"), reviewPrompt(axis, state, diff, error), deps);
-    try {
-      return { type: "reviewed", findings: parseJsonReply(text, reviewSchema).findings };
-    } catch (err) {
-      error = (err as Error).message;
-    }
-  }
-  return { type: "failed", code: "review-invalid", reason: `the ${axis} review did not return valid JSON findings (${error})` };
+  const got = await askJson(env, "reviewer", reviewSchema, (retry) => reviewPrompt(axis, state, diff, retry));
+  if (!got.ok) return { type: "failed", code: "review-invalid", reason: `the ${axis} review did not return valid JSON findings (${got.error})` };
+  return { type: "reviewed", findings: got.answer.findings };
 }
 
 async function pushChangedFiles(env: LoopEnv, state: LoopState): Promise<void> {
