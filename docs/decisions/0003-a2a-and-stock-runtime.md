@@ -74,7 +74,7 @@ Calls to in-cluster services need no EgressPolicy.
 ## Decision
 
 Option A: triage does not call other agents. It replies with the agent to use and the exact
-command (for example `make chat AGENT=hello-agent MSG="/implement <issue URL>"`), and the user
+command (for example `AGENT=hello-agent make chat MSG="/implement <issue URL>"`), and the user
 runs it. This keeps every pause on the agent that owns it and builds nothing around kagent.
 
 A2A is deferred, not ruled out. Retest when a new kagent lands:
