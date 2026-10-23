@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Report each platform part on the kind cluster: one ok or FAIL line for Substrate,
-# kagent, agentgateway, the stock agent, and the image pins. Exits non-zero when any
+# kagent, agentgateway, the stock and triage agents, and the image pins. Exits non-zero when any
 # line is FAIL. Reads Secret names only, never their data.
 set -euo pipefail
 # shellcheck source=platform/lib.sh
@@ -68,11 +68,20 @@ check_gateway() {
 }
 
 check_agent() {
-  local ready
-  ready="$(k get agent stock-agent -n "$KAGENT_NS" \
+  local name="$1" ready
+  ready="$(k get agent "$name" -n "$KAGENT_NS" \
     -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}' 2>&1 || true)"
-  if [ "$ready" = True ]; then pass "stock agent stock-agent Ready"
-  else flunk "stock agent stock-agent not Ready (saw: $(first_line "$ready"))"; fi
+  if [ "$ready" = True ]; then pass "agent $name Ready"
+  else flunk "agent $name not Ready (saw: $(first_line "$ready"))"; fi
+}
+
+# docs-agent (platform/docs-agent.yaml) is applied by make deploy.
+check_docs_agent() {
+  local ready
+  ready="$(k get agent docs-agent -n "$KAGENT_NS" \
+    -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}' 2>&1 || true)"
+  if [ "$ready" = True ]; then pass "docs-agent Ready"
+  else flunk "docs-agent not Ready (saw: $(first_line "$ready"))"; fi
 }
 
 # Every image (containers and init containers) in the platform namespaces must be one
@@ -102,6 +111,8 @@ check_part "Substrate" "substrate-crds substrate-podcert substrate" "$SUBSTRATE_
 check_part "kagent" "kagent-crds kagent" "$KAGENT_NS"
 check_part "agentgateway" "agentgateway-crds agentgateway" "$AGW_NS"
 check_gateway
-check_agent
+check_agent stock-agent
+check_agent triage-agent
+check_docs_agent
 check_images
 exit "$failed"

@@ -16,7 +16,7 @@ The kube context is `kind-build-coding-agent`. Every script passes `--context` (
 |---|---|
 | `make preflight` | Checks tools, versions, and `OPENCODE_KEY`. Creates nothing. |
 | `make up` | Preflight, then creates the registry (`localhost:5001`) and the kind cluster, then installs Substrate and kagent (through the pinned kagent CLI), Gateway API CRDs, agentgateway, the key Secret, and kagent's stock agent. Safe to run again. |
-| `make status` | One `ok` or `FAIL` line each for the cluster, registry, Substrate, kagent, agentgateway, model route, stock agent, and image pins. Exits non-zero on any `FAIL`. |
+| `make status` | One `ok` or `FAIL` line each for the cluster, registry, Substrate, kagent, agentgateway, model route, stock agent, triage-agent (after `make deploy`), and image pins. Exits non-zero on any `FAIL`. |
 | `make smoke` | Proves the platform without our agent: pushes a tiny image, runs it in a Harness by digest, and sends one message to `stock-agent`. Spends model tokens. |
 | `make deploy` | Makes the GitHub token Secret, builds and pushes the agent image, applies the MCP servers and egress policy, then applies `agent.yaml.tmpl` by image digest. Waits for the Agent to be Ready. |
 | `make chat MSG=...` | Sends one message to `hello-agent`. See [../docs/using-the-agent.md](../docs/using-the-agent.md). |
@@ -45,6 +45,8 @@ written to disk, or put on a command line.
 | `kagent-values.yaml` | kagent chart values. Points the model at the gateway. |
 | `gateway.yaml` | The Gateway, the OpenCode Go backend, and the `/v1` route. |
 | `stock-agent.yaml` | kagent's built-in agent, used by `make smoke` and `make status`. |
+| `triage-agent.yaml` | `triage-agent` on the stock runtime: reads a GitHub issue with `issue_read` and decides. Applied by `make deploy`. |
+| `docs-agent.yaml` | `docs-agent`: AgentTemplate and Agent on `hello-harness` (Recipe 2). |
 | `agent.yaml.tmpl` | Our agent: Harness, ModelConfigs, AgentTemplates (`hello-agent` and the `explorer`, `executor`, `reviewer` subagents), and Agent `hello-agent`. `deploy.sh` fills in `@IMAGE@`. |
 | `github-mcp.yaml` | GitHub's MCP server with only `issue_read`, `create_branch`, `push_files`, `create_pull_request`, behind the auth proxy. |
 | `github-mcp-proxy.mjs` | The auth proxy. Adds the token to every request and drops any `Authorization` a caller sends. |

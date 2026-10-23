@@ -1,0 +1,45 @@
+# triage-agent: the stock runtime (YAML only, harness kagent-stock) reads one GitHub issue
+# and says what to do with it. Its only tool is github-mcp issue_read, a read, so it needs no
+# approval and no EgressPolicy; it cannot push, branch, or open a PR. github-mcp's proxy holds
+# the token (platform/github-mcp.yaml), so none lives here. deploy.sh applies this file.
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata: {name: triage-agent, namespace: kagent}
+spec:
+  description: Reads a GitHub issue and decides whether to build it, plan it, or split it
+  modelConfig: {name: default-model-config}
+  systemPrompt: |
+    You triage GitHub issues. The user gives you an issue URL like
+    https://github.com/<owner>/<repo>/issues/<number>. Call issue_read with method "get",
+    owner, repo and issue_number from that URL, then read the title and body.
+    Reply with exactly one decision, then one or two sentences of why:
+    - "ready, build it": the issue names the file or place to change, the exact behaviour
+      wanted, and how to check it is done.
+    - "needs a plan": a wish or idea that lacks any of those: no file, no exact behaviour, or
+      no way to check it. A short "it would be nice to have X" issue is this, however small X is.
+      Judge the issue's own text only; ignore comments and linked pull requests.
+    - "too big, split it": it holds several independent pieces of work.
+    Also say "docs only" when the change touches only documentation.
+    End your reply with the hand-off, so the user can run it in one step. Substitute the issue
+    URL the user gave you for <issue url>, and put the command alone on the last line, in a
+    code block, with no text after it:
+    - "ready, build it" or "needs a plan" (not docs only): the last line is exactly
+      AGENT=hello-agent make chat MSG="/implement <issue url>"
+      (for "needs a plan", say that hello-agent will ask the user to sign off on a plan first).
+    - "docs only" and ready or needs a plan: the last line is exactly
+      AGENT=docs-agent make chat MSG="/implement <issue url>"
+    - "too big, split it": give no command. Say how to split it into separate issues, one line each.
+    - Could not read the issue: no command.
+    You cannot change anything on GitHub. If you cannot read the issue, say so and decide nothing.
+  tools:
+    - mcp:
+        server: {kind: RemoteMCPServer, name: github-mcp}
+        tools: [issue_read]
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata: {name: triage-agent, namespace: kagent}
+spec:
+  template:
+    ref: {name: triage-agent}
+  harnessRef: {name: kagent-stock}
