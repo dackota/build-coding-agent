@@ -7,7 +7,7 @@ import type { ToolFactory } from "./tool-registry.ts";
 import { log } from "./log.ts";
 
 export type ExtensionApi = {
-  /** Adds a custom tool, after the built-ins. The factory runs each turn; it gets the turn's context (`sandbox` among it). */
+  /** Adds a custom tool, after the built-ins. The factory runs each turn; it gets the turn's context (`sandbox` among it, and `call(name, input)` to run a built-in tool). */
   registerTool(name: string, factory: ToolFactory): void;
 };
 
@@ -63,13 +63,13 @@ export async function loadExtensions(dir: string, dataDir: string): Promise<Load
 
 /** Registers each extension's tools, after the built-ins. A taken name stops startup, naming the tool and the file. */
 export function registerExtensionTools(
-  registry: { register(name: string, factory: ToolFactory): void; names(): string[] },
+  registry: { register(name: string, factory: ToolFactory, opts?: { custom?: boolean }): void; names(): string[] },
   extensions: readonly LoadedExtension[],
 ): void {
   for (const ext of extensions) {
     for (const { name, factory } of ext.tools) {
       if (registry.names().includes(name)) throw new Error(`extension ${ext.file}: tool ${JSON.stringify(name)} is already registered`);
-      registry.register(name, factory);
+      registry.register(name, factory, { custom: true });
     }
     log("extension-loaded", { extension: ext.file, tools: ext.tools.map((t) => t.name).join(",") });
   }

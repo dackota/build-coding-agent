@@ -29,12 +29,12 @@ async function toolsLine(files: Record<string, string>, subAgents?: typeof SUB_A
 
 describe("the system prompt's Tools line", () => {
   it("lists the built-ins in order with no skills, subagents or MCP bindings", async () => {
-    expect(await toolsLine({})).toBe(`- Tools: ${BASE}, now.`);
+    expect(await toolsLine({})).toBe(`- Tools: ${BASE}, now, read_files.`);
   });
   it("adds load_skill last when the workspace has a skill", async () => {
-    expect(await toolsLine(SKILL)).toBe(`- Tools: ${BASE}, load_skill, now.`);
+    expect(await toolsLine(SKILL)).toBe(`- Tools: ${BASE}, load_skill, now, read_files.`);
   });
   it("adds task last when the config has subagents", async () => {
-    expect(await toolsLine({}, SUB_AGENTS)).toBe(`- Tools: ${BASE}, task, now.`);
+    expect(await toolsLine({}, SUB_AGENTS)).toBe(`- Tools: ${BASE}, task, now, read_files.`);
   });
 });

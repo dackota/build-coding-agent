@@ -8,7 +8,7 @@ import { createToolRegistry, type TurnContext } from "../src/tool-registry.ts";
 
 const mk = (description: string): Tool => tool({ description, inputSchema: z.object({}), execute: async () => description });
 /** The registry never reads the sandbox, tracker, gate or todos, so stubs stand in. */
-const ctx = (): Omit<TurnContext, "built"> => ({ sandbox: {} as Sandbox, changes: {} as ChangeTracker, taskId: "t", skills: [], gate: {} as ApprovalGate, todos: { list: [] } });
+const ctx = (): Omit<TurnContext, "built" | "call"> => ({ sandbox: {} as Sandbox, changes: {} as ChangeTracker, taskId: "t", skills: [], gate: {} as ApprovalGate, todos: { list: [] } });
 
 it("builds registered tools in registration order, after the MCP tools", () => {
   const reg = createToolRegistry();
@@ -60,4 +60,29 @@ it("refuses to register a name twice", () => {
   const reg = createToolRegistry();
   reg.register("a", () => mk("a"));
   expect(() => reg.register("a", () => mk("a2"))).toThrow(/already registered/);
+});
+
+it("gives a custom tool call(name, input): a built-in runs with the id <outer>:call-<n>", async () => {
+  const seen: string[] = [];
+  const echo = tool({ description: "e", inputSchema: z.object({ v: z.string() }), execute: async ({ v }, o) => (seen.push(o.toolCallId), `got ${v}`) });
+  const reg = createToolRegistry();
+  reg.register("echo", () => echo);
+  reg.register("outer", (c) => tool({ description: "o", inputSchema: z.object({}), execute: async () => [await c.call("echo", { v: "1" }), await c.call("echo", { v: "2" })].join() }), { custom: true });
+  const tools = reg.build(ctx(), {});
+  const out = await tools.outer!.execute!({}, { toolCallId: "T1", messages: [] });
+  expect(out).toBe("got 1,got 2");
+  expect(seen).toEqual(["T1:call-1", "T1:call-2"]);
+});
+
+it("call refuses a custom tool, a tool without execute, an unbuilt name and an unknown name", async () => {
+  const noExec = tool({ description: "n", inputSchema: z.object({}) });
+  const reg = createToolRegistry();
+  reg.register("ask", () => noExec);
+  reg.register("unbuilt", () => undefined);
+  reg.register("custom", () => mk("c"), { custom: true });
+  reg.register("outer", (c) => tool({ description: "o", inputSchema: z.object({ n: z.string() }), execute: async ({ n }) => c.call(n, {}) }), { custom: true });
+  const tools = reg.build(ctx(), {});
+  for (const n of ["ask", "unbuilt", "custom", "outer", "nope"]) {
+    await expect(tools.outer!.execute!({ n }, { toolCallId: "T", messages: [] })).rejects.toThrow(`call("${n}")`);
+  }
 });
