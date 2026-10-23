@@ -37,7 +37,7 @@ export async function createMemorySandbox(root: string): Promise<Sandbox> {
     async writeFile(path, content) {
       const full = await resolve(path);
       await fs.mkdir(full.slice(0, full.lastIndexOf("/")), { recursive: true });
-      await fs.writeFile(full, content, "utf8");
+      await fs.writeFile(full, content);
     },
     async exec(command) {
       const { stdout, stderr, exitCode } = await bash.exec(command, { cwd: MOUNT });

@@ -14,8 +14,8 @@ export type SandboxHooks = {
 export interface Sandbox {
   /** Reads a file by its workspace-relative path. */
   readFile(path: string): Promise<string>;
-  /** Writes a file by its workspace-relative path, creating parent directories. */
-  writeFile(path: string, content: string): Promise<void>;
+  /** Writes a file by its workspace-relative path, creating parent directories. Text is written as UTF-8; bytes as they are. */
+  writeFile(path: string, content: string | Uint8Array): Promise<void>;
   /** Runs a shell command with the workspace as its working directory. */
   exec(command: string): Promise<ExecResult>;
   stop(): Promise<void>;

@@ -42,7 +42,7 @@ export async function createLocalSandbox(root: string, opts: { execTimeoutMs?: n
       await mkdir(dirname(full), { recursive: true });
       // Check again after mkdir: the new directories are real, so the target resolves the same way.
       await resolve(path);
-      await writeFile(full, content, "utf8");
+      await writeFile(full, content);
     },
     exec(command) {
       return new Promise<ExecResult>((done) => {
