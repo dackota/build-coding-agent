@@ -4,7 +4,7 @@ import type { AgentCard } from "@a2a-js/sdk";
 import { DefaultRequestHandler, InMemoryTaskStore, type TaskStore } from "@a2a-js/sdk/server";
 import { A2AService, grpcService, UserBuilder } from "@a2a-js/sdk/server/grpc";
 import type { EarlyListener } from "./early-listener.ts";
-import { describeConfig, loadConfigFromEnv, loadRuntimeFromEnv, parseMcpBindings } from "./config.ts";
+import { describeConfig, loadConfigFromEnv, loadRuntimeFromEnv, parseMcpBindings, parseSkillSources } from "./config.ts";
 import { ControllerTaskStore, DEFAULT_IDENTITY_PATH } from "./controller-task-store.ts";
 import { DEFAULT_MAX_TOOL_OUTPUT_CHARS, TRUNCATION_MARKER } from "./context.ts";
 import { createExecutor, type ExecutorOptions } from "./executor.ts";
@@ -66,15 +66,17 @@ export async function startServer(opts: ServerOptions): Promise<{ server: grpc.S
   const configJson = opts.env.KAGENT_CONFIG_JSON ?? readFileSync(opts.env.KAGENT_CONFIG_PATH ?? "/config/config.json", "utf8");
   const described = describeConfig(configJson);
   const mcpBindings = parseMcpBindings(configJson);
+  const skillSources = parseSkillSources(configJson);
   log("config-received", {
     agentKeys: described.agentKeys.join(","),
     subAgents: JSON.stringify(described.subAgents),
     // URLs and tool names only: headers may carry credentials.
     mcp: JSON.stringify(mcpBindings.map((b) => ({ url: b.url, tools: b.tools, requireApproval: b.requireApproval }))),
+    skills: skillSources.map((k) => k.name).join(","),
   });
   const extensionsDir = opts.env.AGENT_EXTENSIONS_DIR ?? fileURLToPath(new URL("../extensions", import.meta.url));
   const extensions = await loadExtensions(extensionsDir, dataDir);
-  const executor = createExecutor(config, dataDir, executorOptions(opts.env), mcpBindings, extensions);
+  const executor = createExecutor(config, dataDir, executorOptions(opts.env), mcpBindings, extensions, skillSources);
   const handler = new DefaultRequestHandler(buildCard(opts.grpcAddr, opts.cardJson), tasks, executor);
   const server = new grpc.Server();
   server.addService(A2AService, grpcService({ requestHandler: handler, userBuilder: UserBuilder.noAuthentication }));

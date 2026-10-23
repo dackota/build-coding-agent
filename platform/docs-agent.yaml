@@ -9,6 +9,10 @@ spec:
   modelConfig: {name: default-model-config}
   # Short on purpose: the agent adds its own rules (tools, verification, ask_user).
   systemPrompt: You fix documentation (Markdown files). Never change code files. Change only what the task asks for.
+  # One skill from an OCI image that kagent mounts read-only; platform/deploy.sh builds and pins it.
+  skills:
+    - name: docs-style
+      source: {oci: "@DOCS_SKILL_IMAGE@"}
   tools:
     - subAgent:
         name: explorer

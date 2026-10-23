@@ -1,8 +1,8 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vitest";
-import { describeConfig, loadConfig, loadConfigFromEnv, loadRuntimeFromEnv, parseMcpBindings } from "../src/config.ts";
+import { describe, expect, it } from "vitest";
+import { describeConfig, loadConfig, loadConfigFromEnv, loadRuntimeFromEnv, parseMcpBindings, parseSkillSources } from "../src/config.ts";
 
 function write(content: string): string {
   const path = join(mkdtempSync(join(tmpdir(), "cfg-")), "config.json");
@@ -125,6 +125,43 @@ it("fails with the entry index and key names when a subagent has no name or mode
     expect(msg).toContain("description");
     expect(msg).not.toContain(secret);
   }
+});
+
+describe("template skills under agent.agent_plugins", () => {
+  const dirSkill = { name: "docs-style", source: { directory: "/skills/docs-style" } };
+  const config = (agentPlugins: unknown) => JSON.stringify({ agent: { agent_plugins: agentPlugins } });
+
+  it("reads a directory skill's folder", () => {
+    expect(parseSkillSources(config({ skills: [dirSkill] }))).toEqual([{ name: "docs-style", dir: "/skills/docs-style" }]);
+  });
+
+  it("joins the optional path onto the folder", () => {
+    const skill = { name: "x", source: { directory: "/skills/pack", path: "sub/x" } };
+    expect(parseSkillSources(config({ skills: [skill] }))).toEqual([{ name: "x", dir: "/skills/pack/sub/x" }]);
+  });
+
+  it("reads the selected skills of a plugin bundle", () => {
+    const plugin = { skills: ["a", "b"], source: { directory: "/plugins/p" } };
+    expect(parseSkillSources(config({ plugins: [plugin] }))).toEqual([
+      { name: "a", dir: "/plugins/p/skills/a" },
+      { name: "b", dir: "/plugins/p/skills/b" },
+    ]);
+  });
+
+  it("refuses a git skill source, naming the skill", () => {
+    const skill = { name: "from-git", source: { git: { url: "https://x/y.git", commit: "abc" } } };
+    expect(() => parseSkillSources(config({ skills: [skill] }))).toThrow(/from-git.*git/s);
+  });
+
+  it("refuses an S3 skill source, naming the skill", () => {
+    const skill = { name: "from-s3", source: { bucket: { s3: { bucket: "b" } } } };
+    expect(() => parseSkillSources(config({ skills: [skill] }))).toThrow(/from-s3.*S3/s);
+  });
+
+  it("has no skill folders without agent_plugins", () => {
+    expect(parseSkillSources(JSON.stringify({ agent: { instruction: "i" } }))).toEqual([]);
+    expect(parseSkillSources(config({}))).toEqual([]);
+  });
 });
 
 const subWith = (extra: Record<string, unknown>) =>

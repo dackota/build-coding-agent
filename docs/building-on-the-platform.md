@@ -215,7 +215,11 @@ handles it. Our `agent/` already does:
 
 - **Subagents:** arrive in `agent.sub_agents`. The image must run them.
 - **MCP tools:** arrive in `agent.http_tools` and `agent.sse_tools`. The image must connect.
-- **Skills:** kagent does not pass them at all. Our agent reads `skills/` from the workspace.
+- **Skills:** a template's `skills` (OCI image sources) arrive in `agent.agent_plugins.skills`,
+  each with a read-only folder that kagent mounts. Our agent reads their `SKILL.md` files, and
+  also `skills/` from the workspace. Git and S3 sources are refused. On a name clash the
+  template skill wins and the agent logs `skill-clash`. `platform/deploy.sh` builds the
+  example (`docs-style` on docs-agent) as a `FROM scratch` image pinned by digest.
 - **Human-in-the-loop:** the image must send kagent's HITL pause and read the answer.
 
 ## Not supported yet on alpha17

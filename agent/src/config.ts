@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { posix } from "node:path";
 
 /** A subagent kagent compiled from an AgentTemplate bound with `subAgent.templateRef`. */
 export type SubAgentDef = { name: string; description: string; instruction: string; model: string; baseUrl: string };
@@ -144,4 +145,41 @@ export function describeConfig(json: string): { agentKeys: string[]; subAgents: 
     agentKeys: Object.keys(agent).sort(),
     subAgents: subs.map((s) => ({ name: typeof s.name === "string" ? s.name : "", keys: Object.keys(s).sort() })),
   };
+}
+
+/** A template skill: its name and the read-only folder that holds its SKILL.md. */
+export type SkillSource = { name: string; dir: string };
+
+type RawSkillSource = { directory?: unknown; path?: unknown; git?: unknown; bucket?: unknown };
+
+/** The folder a `directory` source mounts (kagent mounts an OCI image there), plus its optional `path`. */
+function sourceDir(source: RawSkillSource | undefined, name: string, where: string): string {
+  if (source?.git !== undefined) throw new Error(`agent config: skill ${JSON.stringify(name)} (${where}) has a git source; only directory sources (OCI images) are supported`);
+  if (source?.bucket !== undefined) throw new Error(`agent config: skill ${JSON.stringify(name)} (${where}) has an S3 source; only directory sources (OCI images) are supported`);
+  if (typeof source?.directory !== "string" || source.directory === "") {
+    throw new Error(`agent config: skill ${JSON.stringify(name)} (${where}) has no directory source; shape ${shape(source)}`);
+  }
+  return typeof source.path === "string" && source.path !== "" ? posix.join(source.directory, source.path) : source.directory;
+}
+
+/**
+ * The template's skills under agent.agent_plugins: each `skills[]` entry, and the selected
+ * skills of each `plugins[]` bundle (found at <directory>/skills/<name>). Only `directory`
+ * sources are read; a git or S3 source is an error naming the skill.
+ */
+export function parseSkillSources(json: string): SkillSource[] {
+  const plugins = (JSON.parse(json) as { agent?: { agent_plugins?: { skills?: unknown; plugins?: unknown } } }).agent?.agent_plugins;
+  const skills = Array.isArray(plugins?.skills) ? (plugins.skills as { name?: unknown; source?: RawSkillSource }[]) : [];
+  const bundles = Array.isArray(plugins?.plugins) ? (plugins.plugins as { skills?: unknown; source?: RawSkillSource }[]) : [];
+  const found: SkillSource[] = skills.map((s, i) => {
+    const name = typeof s?.name === "string" ? s.name : "";
+    if (name === "") throw new Error(`agent config: agent_plugins.skills[${i}] needs a name; shape ${shape(s)}`);
+    return { name, dir: sourceDir(s.source, name, `agent_plugins.skills[${i}]`) };
+  });
+  for (const [i, bundle] of bundles.entries()) {
+    for (const name of Array.isArray(bundle?.skills) ? bundle.skills.filter((n): n is string => typeof n === "string") : []) {
+      found.push({ name, dir: posix.join(sourceDir(bundle.source, name, `agent_plugins.plugins[${i}]`), "skills", name) });
+    }
+  }
+  return found;
 }

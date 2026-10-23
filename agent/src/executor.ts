@@ -4,7 +4,7 @@ import type { Message, Task } from "@a2a-js/sdk";
 import { AgentEvent, type AgentExecutor, type ExecutionEventBus, type RequestContext } from "@a2a-js/sdk/server";
 import { type ModelMessage, stepCountIs, type Tool, tool, ToolLoopAgent } from "ai";
 import { z } from "zod";
-import type { AgentConfig, McpBinding } from "./config.ts";
+import type { AgentConfig, McpBinding, SkillSource } from "./config.ts";
 import { capTools, logStepUsage, pruneMessages } from "./context.ts";
 import { createFileTools } from "./file-tools.ts";
 import { approvalHint, pendingTools, resumeApproval, turnGate } from "./approval.ts";
@@ -182,6 +182,7 @@ export function createExecutor(
   opts: ExecutorOptions,
   mcpBindings: readonly McpBinding[] = [],
   extensions: readonly LoadedExtension[] = [],
+  skillSources: readonly SkillSource[] = [],
 ): AgentExecutor & { shutdown(): Promise<void> } {
   const model = gatewayModel(config.baseUrl, config.model);
   // Every tool the registry builds (MCP, built-in, custom) goes through the extensions' tool_call
@@ -314,7 +315,7 @@ export function createExecutor(
 
   /** Runs the turn with this turn's MCP clients open, and closes them after. */
   async function generateTurn(ctx: RequestContext, bus: ExecutionEventBus, signal: AbortSignal, sandbox: Sandbox, turn: Turn, session: SessionState, todos: TodoHolder): Promise<TurnResult> {
-    const skills = await discoverSkills(sandbox);
+    const skills = await discoverSkills(sandbox, skillSources);
     const gate = turnGate(turn.approvedCalls, turn.approvedKinds);
     const mcp = await openMcpTools(mcpBindings, gate);
     try {

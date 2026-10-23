@@ -48,7 +48,7 @@ The agent saves the session after every model step. A crash or a suspend loses a
 | `bash` | Runs a shell command in the workspace. Read-only commands (`ls`, `cat`, `grep`, `git status`, ...) run at once. Anything else pauses for your approval. 60 s timeout. |
 | `ask_user` | Pauses and asks you a question, with choices when there are a few options. |
 | `todo_write` | Keeps the turn's to-do list. |
-| `load_skill` | Loads a skill's full text. Skills are `skills/<name>/SKILL.md` files in the workspace. Only their names and descriptions are in the prompt. |
+| `load_skill` | Loads a skill's full text. Skills are `SKILL.md` files from the template's mounted skill images and from `skills/<name>/` in the workspace; the template wins a name clash. Only their names and descriptions are in the prompt. |
 | `task` | Hands a job to a subagent (see below). |
 | MCP tools | Tools from MCP servers bound on the `AgentTemplate`. Today: `create_branch`, `push_files`, `create_pull_request` (GitHub) and `delete_branch` (a demo that deletes nothing). Each call pauses for approval. |
 | Extension tools | Tools added by modules in `agent/extensions/`. See [extensions.md](extensions.md). |
