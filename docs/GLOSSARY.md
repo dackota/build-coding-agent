@@ -1,6 +1,44 @@
-# build-coding-agent
+# Glossary
 
-A TypeScript coding agent that runs as a kagent 1.x `byo` agent on Agent Substrate. These are the extension terms plan 18 adds; the orchestrator merges them into a root `GLOSSARY.md` (none exists yet).
+The words this repo uses, and the words to avoid for each.
+
+## Platform
+
+**byo agent**:
+A kagent agent that runs our own image ("bring your own") instead of kagent's built-in runtime. Ours is in `agent/`.
+_Avoid_: custom agent, BYO harness
+
+**Harness**:
+The kagent resource that says which image runs an agent and on which Substrate worker pool.
+_Avoid_: runtime, deployment
+
+**AgentTemplate**:
+The kagent resource that holds an agent's model, system prompt, MCP tool bindings, and subagents.
+_Avoid_: agent spec
+
+**Actor**:
+One session's sandboxed process on Agent Substrate. It is frozen to a snapshot when idle and restored on the next message.
+_Avoid_: pod, container, worker
+
+**Session**:
+One conversation, named by its A2A `contextId`. Its state is `/data/sessions/<contextId>/state.json` and its files are `/data/workspaces/<contextId>/`.
+_Avoid_: thread, chat
+
+**Turn**:
+One user message and the agent's work on it, up to a reply or a pause. One A2A task.
+_Avoid_: run (that is an implement run), request
+
+**Pause**:
+A task in `INPUT_REQUIRED` that waits for the user: an `ask_user_request` (a question) or a `tool_approval_request` (approve, deny, or approve for the session).
+_Avoid_: interrupt, prompt
+
+**Workspace**:
+The session's directory where every file tool and command runs. Tools refuse paths that lead out of it.
+_Avoid_: repo, sandbox (the `Sandbox` is the interface that reaches it)
+
+**Subagent**:
+A second model loop the main agent starts with the `task` tool: `explorer` (reads), `executor` (writes), or `reviewer` (reads). It shares the workspace.
+_Avoid_: child agent, worker
 
 ## Extensibility
 
@@ -43,7 +81,7 @@ The pure function `next(state, event)` in `agent/src/loop.ts` that gives the run
 _Avoid_: workflow engine, state graph
 
 **Start approval**:
-The one pause of a run: a `tool_approval_request` that names the exact setup command, the exact test command, the branch, and the repo the pull request goes to. After it, the loop runs those two commands and calls the GitHub MCP server's branch, push and pull request tools with no second approval.
+The pause before a run builds anything: a `tool_approval_request` that names the exact setup command, the exact test command, the branch, and the repo the pull request goes to. After it, the loop runs those two commands and calls the GitHub MCP server's branch, push and pull request tools with no second approval.
 _Avoid_: confirmation, consent prompt
 
 **Loop command**:
