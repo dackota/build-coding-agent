@@ -44,9 +44,9 @@ export async function createLocalSandbox(root: string, opts: { execTimeoutMs?: n
       await resolve(path);
       await writeFile(full, content);
     },
-    exec(command) {
+    exec(command, opts) {
       return new Promise<ExecResult>((done) => {
-        execFile("/bin/sh", ["-c", command], { cwd: realRoot, env: EXEC_ENV, timeout: execTimeoutMs, maxBuffer: EXEC_MAX_BUFFER }, (err, stdout, stderr) => {
+        execFile("/bin/sh", ["-c", command], { cwd: realRoot, env: EXEC_ENV, timeout: opts?.timeoutMs ?? execTimeoutMs, maxBuffer: EXEC_MAX_BUFFER }, (err, stdout, stderr) => {
           const code = err ? (typeof err.code === "number" ? err.code : 1) : 0;
           done({ stdout, stderr, exitCode: code, ...(err?.killed ? { hasTimedOut: true } : {}) });
         });

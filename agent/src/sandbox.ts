@@ -16,8 +16,8 @@ export interface Sandbox {
   readFile(path: string): Promise<string>;
   /** Writes a file by its workspace-relative path, creating parent directories. Text is written as UTF-8; bytes as they are. */
   writeFile(path: string, content: string | Uint8Array): Promise<void>;
-  /** Runs a shell command with the workspace as its working directory. */
-  exec(command: string): Promise<ExecResult>;
+  /** Runs a shell command with the workspace as its working directory. `timeoutMs` replaces the sandbox's own limit for this call. */
+  exec(command: string, opts?: { timeoutMs?: number }): Promise<ExecResult>;
   stop(): Promise<void>;
 }
 
@@ -61,8 +61,8 @@ export async function withHooks(sandbox: Sandbox, hooks: SandboxHooks): Promise<
   return {
     readFile: (path) => sandbox.readFile(path),
     writeFile: (path, content) => sandbox.writeFile(path, content),
-    async exec(command) {
-      const result = await sandbox.exec(command);
+    async exec(command, opts) {
+      const result = await sandbox.exec(command, opts);
       if (result.hasTimedOut) await hooks.onTimeout?.(command);
       return result;
     },

@@ -3,7 +3,8 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-export type FakeMcpTool = { name: string; description: string; result: string };
+/** `result` is the tool's reply text, or a function of the call's arguments. */
+export type FakeMcpTool = { name: string; description: string; result: string | ((args: any) => string) };
 export type FakeMcp = { url: string; calls: { name: string; args: unknown }[]; close: () => Promise<void> };
 
 type RpcRequest = { jsonrpc: "2.0"; id?: number | string; method: string; params?: { name?: string; arguments?: unknown } };
@@ -23,7 +24,8 @@ function answer(req: RpcRequest, tools: FakeMcpTool[], calls: FakeMcp["calls"]):
     case "tools/call": {
       const tool = tools.find((t) => t.name === req.params?.name);
       calls.push({ name: req.params?.name ?? "", args: req.params?.arguments });
-      return { content: [{ type: "text", text: tool ? tool.result : "no such tool" }], isError: !tool };
+      const text = !tool ? "no such tool" : typeof tool.result === "function" ? tool.result(req.params?.arguments) : tool.result;
+      return { content: [{ type: "text", text }], isError: !tool };
     }
     default:
       return {};

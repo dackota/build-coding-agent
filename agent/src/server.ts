@@ -34,8 +34,10 @@ function buildCard(grpcAddr: string, cardJson?: string): AgentCard {
 }
 
 const DEFAULT_MAX_STEPS = 25;
+const DEFAULT_LOOP_TIMEOUT_MS = 300_000;
+const DEFAULT_GIT_BASE_URL = "https://github.com";
 
-/** AGENT_MAX_STEPS (a positive integer, default 25), AGENT_MAX_TOOL_OUTPUT_CHARS (default 20000) and AGENT_SANDBOX ("local", the default, or "memory" for tests). */
+/** AGENT_MAX_STEPS (a positive integer, default 25), AGENT_LOOP_TIMEOUT_MS (the implement loop's own command timeout, default 300000), AGENT_GIT_BASE_URL (where the loop clones from, default https://github.com), AGENT_MAX_TOOL_OUTPUT_CHARS (default 20000) and AGENT_SANDBOX ("local", the default, or "memory" for tests). */
 export function executorOptions(env: NodeJS.ProcessEnv): ExecutorOptions {
   const maxSteps = env.AGENT_MAX_STEPS === undefined ? DEFAULT_MAX_STEPS : Number(env.AGENT_MAX_STEPS);
   if (!Number.isInteger(maxSteps) || maxSteps < 1) throw new Error(`AGENT_MAX_STEPS must be a positive integer, got ${JSON.stringify(env.AGENT_MAX_STEPS)}`);
@@ -44,7 +46,11 @@ export function executorOptions(env: NodeJS.ProcessEnv): ExecutorOptions {
     throw new Error(`AGENT_MAX_TOOL_OUTPUT_CHARS must be an integer of at least ${TRUNCATION_MARKER.length + 1}, got ${JSON.stringify(env.AGENT_MAX_TOOL_OUTPUT_CHARS)}`);
   const sandbox = env.AGENT_SANDBOX ?? "local";
   if (sandbox !== "local" && sandbox !== "memory") throw new Error(`AGENT_SANDBOX must be "local" or "memory", got ${JSON.stringify(sandbox)}`);
-  return { maxSteps, sandbox, maxToolOutputChars };
+  const loopCommandTimeoutMs = env.AGENT_LOOP_TIMEOUT_MS === undefined ? DEFAULT_LOOP_TIMEOUT_MS : Number(env.AGENT_LOOP_TIMEOUT_MS);
+  if (!Number.isInteger(loopCommandTimeoutMs) || loopCommandTimeoutMs < 1)
+    throw new Error(`AGENT_LOOP_TIMEOUT_MS must be a positive integer, got ${JSON.stringify(env.AGENT_LOOP_TIMEOUT_MS)}`);
+  const gitBaseUrl = (env.AGENT_GIT_BASE_URL ?? DEFAULT_GIT_BASE_URL).replace(/\/+$/, "");
+  return { maxSteps, sandbox, maxToolOutputChars, loopCommandTimeoutMs, gitBaseUrl };
 }
 
 /** Load config, build the A2A request handler, and serve A2A over gRPC. */
