@@ -1,7 +1,7 @@
 # A tiny MCP server for the requireApproval check: one tool, delete_branch, that deletes
 # nothing and logs every call. Streamable HTTP, JSON answers, no dependencies (node only).
 # The Deployment runs in its own namespace; the RemoteMCPServer must sit beside the
-# AgentTemplate that binds it (kagent), and agent.yaml.tmpl binds it with requireApproval.
+# AgentTemplate that binds it (agents), and agent.yaml.tmpl binds it with requireApproval.
 apiVersion: v1
 kind: Namespace
 metadata: {name: demo-mcp}
@@ -81,7 +81,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: RemoteMCPServer
-metadata: {name: demo-mcp, namespace: kagent}
+metadata: {name: demo-mcp, namespace: agents}
 spec:
   description: Demo MCP server with one destructive-looking tool, for the requireApproval check
   protocol: STREAMABLE_HTTP

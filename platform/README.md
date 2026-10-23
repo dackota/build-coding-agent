@@ -63,7 +63,7 @@ where `localhost:5001` is not the registry. It also speaks plain HTTP only to a 
 
 ```sh
 make status
-kubectl --context kind-build-coding-agent -n kagent get agents.api.kagent.dev,harnesses.api.kagent.dev
+kubectl --context kind-build-coding-agent -n agents get agents.api.kagent.dev,harnesses.api.kagent.dev
 kubectl --context kind-build-coding-agent -n github-mcp logs deploy/github-mcp -c auth-proxy
 kubectl --context kind-build-coding-agent -n demo-mcp logs deploy/demo-mcp
 ```

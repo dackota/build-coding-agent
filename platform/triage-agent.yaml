@@ -4,7 +4,7 @@
 # the token (platform/github-mcp.yaml), so none lives here. deploy.sh applies this file.
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
-metadata: {name: triage-agent, namespace: kagent}
+metadata: {name: triage-agent, namespace: agents}
 spec:
   description: Reads a GitHub issue and decides whether to build it, plan it, or split it
   modelConfig: {name: default-model-config}
@@ -38,7 +38,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
-metadata: {name: triage-agent, namespace: kagent}
+metadata: {name: triage-agent, namespace: agents}
 spec:
   template:
     ref: {name: triage-agent}

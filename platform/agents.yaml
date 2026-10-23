@@ -1,0 +1,56 @@
+# The namespace `agents` holds every agent of ours; `kagent` holds only what the kagent
+# install made. kagent resolves a Harness's workerPoolRef and an AgentTemplate's
+# modelConfig in the object's own namespace, so `agents` gets its own WorkerPool and its
+# own default-model-config, mirroring the chart's in `kagent`.
+# install.sh replaces @SUBSTRATE_WORKER_IMAGE@ from platform/versions.env and applies this
+# file before stock-agent.yaml.
+apiVersion: v1
+kind: Namespace
+metadata: {name: agents}
+---
+# The worker pods' identity; it needs no RBAC, like the chart's kagent-default.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: agents-default, namespace: agents}
+---
+# Mirrors the chart's WorkerPool kagent-default (templates/substrate-workerpool.yaml).
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: agents-default
+  namespace: agents
+  labels:
+    kagent.dev/worker-pool-name: agents-default
+    kagent.dev/worker-pool-namespace: agents
+spec:
+  replicas: 1
+  workerImage: "@SUBSTRATE_WORKER_IMAGE@"
+  sandboxClasses:
+    - name: gvisor
+      configRef: {name: gvisor-default}
+  template:
+    serviceAccountName: agents-default
+---
+# A placeholder key, like the chart's kagent-openai Secret: agentgateway holds the real key
+# and ignores this one, but the ModelConfig must name a Secret that resolves.
+apiVersion: v1
+kind: Secret
+metadata: {name: kagent-openai, namespace: agents}
+type: Opaque
+stringData:
+  OPENAI_API_KEY: not-used-agentgateway-holds-the-key
+---
+# Mirrors the chart's default-model-config (platform/kagent-values.yaml): the model goes
+# through agentgateway only.
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata: {name: default-model-config, namespace: agents}
+spec:
+  provider: OpenAI
+  model: glm-5.3-flash
+  apiKeySecret: kagent-openai
+  apiKeySecretKey: OPENAI_API_KEY
+  stream: true
+  openAI:
+    apiFormat: chatCompletions
+    baseUrl: http://agentgateway-proxy.agentgateway-system.svc.cluster.local/v1

@@ -3,7 +3,7 @@
 # here: the model goes through agentgateway and the agent holds no git credential.
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
-metadata: {name: docs-agent, namespace: kagent}
+metadata: {name: docs-agent, namespace: agents}
 spec:
   description: Fixes documentation files only
   modelConfig: {name: default-model-config}
@@ -17,7 +17,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
-metadata: {name: docs-agent, namespace: kagent}
+metadata: {name: docs-agent, namespace: agents}
 spec:
   template: {ref: {name: docs-agent}}
   harnessRef: {name: hello-harness}

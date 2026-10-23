@@ -89,6 +89,7 @@ install:
   substrate:
     repository: $SUBSTRATE_CHART_REPO/
     version: $SUBSTRATE_VERSION
+    valuesFiles: [$PLATFORM_DIR/substrate-values.yaml]
   podCertificate:
     repository: $SUBSTRATE_CHART_REPO/
     version: $SUBSTRATE_VERSION
@@ -147,8 +148,10 @@ make_key_secret() {
 apply_gateway_and_agent() {
   k apply -f "$PLATFORM_DIR/gateway.yaml"
   k wait --for=condition=Programmed gateway/agentgateway-proxy -n "$AGW_NS" --timeout="$READY_TIMEOUT"
+  # The namespace agents with its WorkerPool and ModelConfig, before any agent in it.
+  sed "s|@SUBSTRATE_WORKER_IMAGE@|$SUBSTRATE_WORKER_IMAGE|" "$PLATFORM_DIR/agents.yaml" | k apply -f -
   k apply -f "$PLATFORM_DIR/stock-agent.yaml"
-  k wait --for=condition=Ready agent/stock-agent -n "$KAGENT_NS" --timeout="$READY_TIMEOUT"
+  k wait --for=condition=Ready agent/stock-agent -n "$AGENTS_NS" --timeout="$READY_TIMEOUT"
 }
 
 # `make up` runs preflight.sh before it creates anything; run it here only when this

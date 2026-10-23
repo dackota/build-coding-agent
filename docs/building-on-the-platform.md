@@ -3,7 +3,11 @@
 How to add your own agents, tools, and models to the cluster `make up` builds. Each recipe
 is a YAML change you apply with `kubectl --context kind-build-coding-agent apply -f <file>`.
 
-All resources here are `api.kagent.dev/v1alpha3` in namespace `kagent`. kagent is an alpha
+All resources here are `api.kagent.dev/v1alpha3` in namespace `agents`, which holds every
+agent of ours (`platform/agents.yaml` makes it, with its own WorkerPool `agents-default` and
+`default-model-config`). kagent finds a Harness, ModelConfig, or RemoteMCPServer only in the
+agent's own namespace, so put each one there too. `kagent` holds only what the kagent install
+made. kagent is an alpha
 (1.0.0-alpha17), so these shapes can change between releases. Each recipe says if this
 repo has run it or not.
 
@@ -28,7 +32,7 @@ Use kagent's built-in runtime. You write only YAML. Copy `platform/stock-agent.y
 ```yaml
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
-metadata: {name: my-helper, namespace: kagent}
+metadata: {name: my-helper, namespace: agents}
 spec:
   description: Answers questions about our runbooks
   modelConfig: {name: default-model-config}
@@ -36,7 +40,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
-metadata: {name: my-helper, namespace: kagent}
+metadata: {name: my-helper, namespace: agents}
 spec:
   template: {ref: {name: my-helper}}
   harnessRef: {name: kagent-stock}
@@ -66,7 +70,7 @@ Reuse `hello-harness` with a new template. You get every feature of `agent/`: fi
 ```yaml
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
-metadata: {name: docs-agent, namespace: kagent}
+metadata: {name: docs-agent, namespace: agents}
 spec:
   description: Fixes docs only
   modelConfig: {name: default-model-config}
@@ -79,7 +83,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
-metadata: {name: docs-agent, namespace: kagent}
+metadata: {name: docs-agent, namespace: agents}
 spec:
   template: {ref: {name: docs-agent}}
   harnessRef: {name: hello-harness}
@@ -120,7 +124,7 @@ agent needs:
 ```yaml
 apiVersion: api.kagent.dev/v1alpha3
 kind: RemoteMCPServer
-metadata: {name: my-mcp, namespace: kagent}
+metadata: {name: my-mcp, namespace: agents}
 spec:
   description: What it does
   protocol: STREAMABLE_HTTP
@@ -143,7 +147,7 @@ Route every model through agentgateway. Then the key stays in the gateway.
 ```yaml
 apiVersion: api.kagent.dev/v1alpha3
 kind: ModelConfig
-metadata: {name: my-model-config, namespace: kagent}
+metadata: {name: my-model-config, namespace: agents}
 spec:
   provider: OpenAI
   model: glm-5.1
@@ -181,7 +185,7 @@ An actor can reach almost nothing by default. Add an `EgressPolicy` and list it 
 ```yaml
 apiVersion: api.kagent.dev/v1alpha3
 kind: EgressPolicy
-metadata: {name: my-egress, namespace: kagent}
+metadata: {name: my-egress, namespace: agents}
 spec:
   destinations:
     - origin: https://pypi.org

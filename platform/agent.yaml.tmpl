@@ -1,16 +1,16 @@
 # The hello byo agent. deploy.sh replaces @IMAGE@ with <registry kind-network address>:5000/hello-agent@sha256:<digest>.
-# No key lives here: the agent reaches the model through agentgateway via kagent's
-# default-model-config, and the gateway holds the key.
+# No key lives here: the agent reaches the model through agentgateway via the
+# default-model-config in namespace agents (platform/agents.yaml), and the gateway holds the key.
 apiVersion: api.kagent.dev/v1alpha3
 kind: Harness
-metadata: {name: hello-harness, namespace: kagent}
+metadata: {name: hello-harness, namespace: agents}
 spec:
   byo: {}
   workload:
     image: @IMAGE@
     command: ["node", "/app/src/main.ts"]
   substrate:
-    workerPoolRef: {name: kagent-default}
+    workerPoolRef: {name: agents-default}
     snapshotPolicy:
       location: gs://ate-snapshots/kagent/
 ---
@@ -18,7 +18,7 @@ spec:
 # a cheap one to explore, a stronger one to execute and to review.
 apiVersion: api.kagent.dev/v1alpha3
 kind: ModelConfig
-metadata: {name: explorer-model-config, namespace: kagent}
+metadata: {name: explorer-model-config, namespace: agents}
 spec:
   provider: OpenAI
   model: glm-5.3-flash
@@ -28,7 +28,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: ModelConfig
-metadata: {name: executor-model-config, namespace: kagent}
+metadata: {name: executor-model-config, namespace: agents}
 spec:
   provider: OpenAI
   model: glm-5.1
@@ -38,7 +38,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: ModelConfig
-metadata: {name: reviewer-model-config, namespace: kagent}
+metadata: {name: reviewer-model-config, namespace: agents}
 spec:
   provider: OpenAI
   model: glm-5.1
@@ -48,7 +48,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
-metadata: {name: hello-agent, namespace: kagent}
+metadata: {name: hello-agent, namespace: agents}
 spec:
   description: Hello TypeScript byo agent
   modelConfig: {name: default-model-config}
@@ -92,7 +92,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
-metadata: {name: explorer-template, namespace: kagent}
+metadata: {name: explorer-template, namespace: agents}
 spec:
   description: Read-only explorer subagent
   modelConfig: {name: explorer-model-config}
@@ -100,7 +100,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
-metadata: {name: executor-template, namespace: kagent}
+metadata: {name: executor-template, namespace: agents}
 spec:
   description: Executor subagent with full file tools
   modelConfig: {name: executor-model-config}
@@ -108,7 +108,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
-metadata: {name: reviewer-template, namespace: kagent}
+metadata: {name: reviewer-template, namespace: agents}
 spec:
   description: Read-only reviewer subagent
   modelConfig: {name: reviewer-model-config}
@@ -116,7 +116,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
-metadata: {name: hello-agent, namespace: kagent}
+metadata: {name: hello-agent, namespace: agents}
 spec:
   template:
     ref: {name: hello-agent}

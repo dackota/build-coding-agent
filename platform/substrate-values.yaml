@@ -1,0 +1,9 @@
+# Substrate chart values for `kagent install` (platform/install.sh). The kagent CLI grants
+# the credential provider atespace kagent only; a values file replaces that list, so it
+# names both: kagent (the install's own) and agents (platform/agents.yaml, every agent of ours).
+credentialProvider:
+  namespacePolicies:
+    - atespace: kagent
+      allowedNamespaces: [kagent]
+    - atespace: agents
+      allowedNamespaces: [agents]

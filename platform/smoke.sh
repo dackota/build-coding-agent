@@ -45,20 +45,20 @@ check_harness() {
   k apply -f - <<EOF
 apiVersion: api.kagent.dev/v1alpha3
 kind: Harness
-metadata: {name: $SMOKE_HARNESS, namespace: $KAGENT_NS}
+metadata: {name: $SMOKE_HARNESS, namespace: $AGENTS_NS}
 spec:
   byo: {}
   workload:
     image: $image
     command: ["/bin/true"]
   substrate:
-    workerPoolRef: {name: kagent-default}
+    workerPoolRef: {name: agents-default}
     snapshotPolicy:
       location: gs://ate-snapshots/kagent/
 EOF
-  got="$(k get harness "$SMOKE_HARNESS" -n "$KAGENT_NS" -o 'jsonpath={.spec.workload.image}')"
+  got="$(k get harness "$SMOKE_HARNESS" -n "$AGENTS_NS" -o 'jsonpath={.spec.workload.image}')"
   [ "$got" = "$image" ] || fail "Harness $SMOKE_HARNESS image is $got, want $image"
-  k get harness "$SMOKE_HARNESS" -n "$KAGENT_NS"
+  k get harness "$SMOKE_HARNESS" -n "$AGENTS_NS"
   node="$(kind get nodes --name "$CLUSTER" | head -n 1)"
   docker exec "$node" crictl pull "$image" >/dev/null ||
     fail "kind node $node could not pull $image from the registry"
@@ -81,7 +81,7 @@ send_message() {
   while :; do
     if resp="$(curl -fsS --max-time "$A2A_MAX_TIME" -H 'content-type: application/json' -H 'A2A-Version: 1.0' \
       -H 'X-User-Id: smoke@build-coding-agent' -d "$body" \
-      "http://localhost:$LOCAL_PORT/agents/$KAGENT_NS/stock-agent" 2>&1)"; then
+      "http://localhost:$LOCAL_PORT/agents/$AGENTS_NS/stock-agent" 2>&1)"; then
       # A 2xx answer that is not JSON is a controller fault, not a waking agent.
       answer="$(printf '%s' "$resp" | jq -r '[.result.task.artifacts[]?.parts[]?.text // empty,
         .result.message.parts[]?.text // empty] | join("\n")')" ||
