@@ -1,7 +1,12 @@
+import { spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { expect, it } from "vitest";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import { describe, expect, it } from "vitest";
 import { sendMessage, sendTurn } from "../src/a2a-client.ts";
+import { AGENT_DIR } from "./helpers.ts";
 
 const HITL_URI = "https://kagent.dev/extensions/hitl/v1";
 
@@ -329,4 +334,73 @@ it("reads a pause from the task snapshot that ends a stream", async () => {
   expect(got.pause?.requestId).toBe("req-1");
   expect(got.taskId).toBe("task-9");
   expect(got.contextId).toBe("ctx-9");
+});
+
+// A kubectl stand-in: it records its argv, then serves the controller on the forwarded local
+// port and records the path of each A2A request, answering with one completed reply.
+const FAKE_KUBECTL = `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+import { createServer } from "node:http";
+const log = (entry) => appendFileSync(process.env.FAKE_KUBECTL_LOG, JSON.stringify(entry) + "\\n");
+const args = process.argv.slice(2);
+log({ argv: args });
+const port = Number(args.find((a) => /^\\d+:8083$/.test(a)).split(":")[0]);
+const sse = (result) => "data: " + JSON.stringify({ jsonrpc: "2.0", id: 1, result }) + "\\n\\n";
+createServer((req, res) => {
+  if (req.method !== "POST") return res.writeHead(200).end();
+  log({ path: req.url });
+  req.resume();
+  req.on("end", () => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(
+      sse({ artifactUpdate: { taskId: "t-1", contextId: "c-1", artifact: { name: "reply", parts: [{ text: "pong" }] }, lastChunk: true } }) +
+        sse({ statusUpdate: { taskId: "t-1", contextId: "c-1", status: { state: "TASK_STATE_COMPLETED" } } }),
+    );
+  });
+}).listen(port, "127.0.0.1");
+`;
+
+/** Runs the CLI with no KAGENT_URL, so it port-forwards through the fake kubectl; returns what kubectl saw. */
+async function runForwardedCli(env: Record<string, string>): Promise<{ code: number | null; stdout: string; forwardNamespace?: string; paths: string[] }> {
+  const dir = mkdtempSync(join(tmpdir(), "fake-kubectl-"));
+  writeFileSync(join(dir, "kubectl"), FAKE_KUBECTL, { mode: 0o755 });
+  const logFile = join(dir, "log.jsonl");
+  writeFileSync(logFile, "");
+  const child = spawn("node", ["src/cli.ts", "--", "ping"], {
+    cwd: AGENT_DIR,
+    env: { PATH: `${dir}${delimiter}${process.env.PATH ?? ""}`, FAKE_KUBECTL_LOG: logFile, ...env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+  const code = await new Promise<number | null>((r) => child.once("exit", r));
+  const entries = readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { argv?: string[]; path?: string });
+  const argv = entries.find((e) => e.argv)?.argv ?? [];
+  const nsAt = argv.indexOf("-n");
+  return { code, stdout, forwardNamespace: nsAt >= 0 ? argv[nsAt + 1] : undefined, paths: entries.flatMap((e) => (e.path ? [e.path] : [])) };
+}
+
+describe("CLI namespaces", () => {
+  it("with no env the CLI port-forwards to the controller in kagent and sends to the agent in agents", async () => {
+    const got = await runForwardedCli({});
+
+    expect(got.forwardNamespace).toBe("kagent");
+    expect(got.paths).toEqual(["/agents/agents/hello-agent"]);
+    expect(got.stdout).toContain("pong");
+    expect(got.code).toBe(0);
+  });
+
+  it("AGENT_NAMESPACE changes only the agent path", async () => {
+    const got = await runForwardedCli({ AGENT_NAMESPACE: "team-a", AGENT: "docs-agent" });
+
+    expect(got.forwardNamespace).toBe("kagent");
+    expect(got.paths).toEqual(["/agents/team-a/docs-agent"]);
+  });
+
+  it("KAGENT_NAMESPACE changes only the port-forward", async () => {
+    const got = await runForwardedCli({ KAGENT_NAMESPACE: "kagent-ctl" });
+
+    expect(got.forwardNamespace).toBe("kagent-ctl");
+    expect(got.paths).toEqual(["/agents/agents/hello-agent"]);
+  });
 });

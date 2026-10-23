@@ -3,7 +3,11 @@
 How to add your own agents, tools, and models to the cluster `make up` builds. Each recipe
 is a YAML change you apply with `kubectl --context kind-build-coding-agent apply -f <file>`.
 
-All resources here are `api.kagent.dev/v1alpha3` in namespace `kagent`. kagent is an alpha
+All resources here are `api.kagent.dev/v1alpha3` in namespace `agents`, which holds every
+agent of ours (`platform/agents.yaml` makes it, with its own WorkerPool `agents-default` and
+`default-model-config`). kagent finds a Harness, ModelConfig, or RemoteMCPServer only in the
+agent's own namespace, so put each one there too. `kagent` holds only what the kagent install
+made. kagent is an alpha
 (1.0.0-alpha17), so these shapes can change between releases. Each recipe says if this
 repo has run it or not.
 
@@ -28,7 +32,7 @@ Use kagent's built-in runtime. You write only YAML. Copy `platform/stock-agent.y
 ```yaml
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
-metadata: {name: my-helper, namespace: kagent}
+metadata: {name: my-helper, namespace: agents}
 spec:
   description: Answers questions about our runbooks
   modelConfig: {name: default-model-config}
@@ -36,7 +40,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
-metadata: {name: my-helper, namespace: kagent}
+metadata: {name: my-helper, namespace: agents}
 spec:
   template: {ref: {name: my-helper}}
   harnessRef: {name: kagent-stock}
@@ -66,7 +70,7 @@ Reuse `hello-harness` with a new template. You get every feature of `agent/`: fi
 ```yaml
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
-metadata: {name: docs-agent, namespace: kagent}
+metadata: {name: docs-agent, namespace: agents}
 spec:
   description: Fixes docs only
   modelConfig: {name: default-model-config}
@@ -79,7 +83,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
-metadata: {name: docs-agent, namespace: kagent}
+metadata: {name: docs-agent, namespace: agents}
 spec:
   template: {ref: {name: docs-agent}}
   harnessRef: {name: hello-harness}
@@ -120,7 +124,7 @@ agent needs:
 ```yaml
 apiVersion: api.kagent.dev/v1alpha3
 kind: RemoteMCPServer
-metadata: {name: my-mcp, namespace: kagent}
+metadata: {name: my-mcp, namespace: agents}
 spec:
   description: What it does
   protocol: STREAMABLE_HTTP
@@ -129,10 +133,20 @@ spec:
 
 3. Bind it on a template (Recipe 3).
 
-**If it needs a secret, do not put it in `RemoteMCPServer` headers.** kagent copies headers
-into the agent's config, so the agent would hold the secret. Do what `github-mcp.yaml` does:
-put a small proxy in the server's pod that adds the secret from a Secret. The
-`RemoteMCPServer` points at the proxy and has no headers.
+**If it needs a secret, take the header from a Secret with `headersFrom`.** Do what
+`github-mcp.yaml` does: a Secret in `agents` holds the full header value (for example
+`Bearer <token>`), and the `RemoteMCPServer` names it:
+
+```yaml
+  headersFrom:
+    - name: Authorization
+      valueFrom: {type: Secret, name: my-mcp-token, key: token}
+```
+
+kagent puts only `__KAGENT_ENV[KAGENT_CREDENTIAL_<hash>]__` in the agent's config and a
+placeholder in the actor's env. The agent sends the placeholder, and Substrate's egress
+gateway swaps it for the Secret as the request leaves the actor. Never put a secret in a
+plain `value` header: kagent copies those into the agent's config.
 
 ## Recipe 5: a new model
 
@@ -143,7 +157,7 @@ Route every model through agentgateway. Then the key stays in the gateway.
 ```yaml
 apiVersion: api.kagent.dev/v1alpha3
 kind: ModelConfig
-metadata: {name: my-model-config, namespace: kagent}
+metadata: {name: my-model-config, namespace: agents}
 spec:
   provider: OpenAI
   model: glm-5.1
@@ -181,7 +195,7 @@ An actor can reach almost nothing by default. Add an `EgressPolicy` and list it 
 ```yaml
 apiVersion: api.kagent.dev/v1alpha3
 kind: EgressPolicy
-metadata: {name: my-egress, namespace: kagent}
+metadata: {name: my-egress, namespace: agents}
 spec:
   destinations:
     - origin: https://pypi.org
@@ -211,7 +225,11 @@ handles it. Our `agent/` already does:
 
 - **Subagents:** arrive in `agent.sub_agents`. The image must run them.
 - **MCP tools:** arrive in `agent.http_tools` and `agent.sse_tools`. The image must connect.
-- **Skills:** kagent does not pass them at all. Our agent reads `skills/` from the workspace.
+- **Skills:** a template's `skills` (OCI image sources) arrive in `agent.agent_plugins.skills`,
+  each with a read-only folder that kagent mounts. Our agent reads their `SKILL.md` files, and
+  also `skills/` from the workspace. Git and S3 sources are refused. On a name clash the
+  template skill wins and the agent logs `skill-clash`. `platform/deploy.sh` builds the
+  example (`docs-style` on docs-agent) as a `FROM scratch` image pinned by digest.
 - **Human-in-the-loop:** the image must send kagent's HITL pause and read the answer.
 
 ## Not supported yet on alpha17

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Report each platform part on the kind cluster: one ok or FAIL line for Substrate,
-# kagent, agentgateway, the stock and triage agents, and the image pins. Exits non-zero when any
+# kagent, agentgateway, each of our agents (in namespace agents), and the image pins. Exits non-zero when any
 # line is FAIL. Reads Secret names only, never their data.
 set -euo pipefail
 # shellcheck source=platform/lib.sh
@@ -69,10 +69,10 @@ check_gateway() {
 
 check_agent() {
   local name="$1" ready
-  ready="$(k get agent "$name" -n "$KAGENT_NS" \
+  ready="$(k get agent "$name" -n "$AGENTS_NS" \
     -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}' 2>&1 || true)"
-  if [ "$ready" = True ]; then pass "agent $name Ready"
-  else flunk "agent $name not Ready (saw: $(first_line "$ready"))"; fi
+  if [ "$ready" = True ]; then pass "agent $AGENTS_NS/$name Ready"
+  else flunk "agent $AGENTS_NS/$name not Ready (saw: $(first_line "$ready"))"; fi
 }
 
 # Every image (containers and init containers) in the platform namespaces must be one
@@ -80,7 +80,7 @@ check_agent() {
 IMAGE_IDS='{range .items[*].status.containerStatuses[*]}{.imageID}{"\n"}{end}{range .items[*].status.initContainerStatuses[*]}{.imageID}{"\n"}{end}'
 check_images() {
   local ns out ids="" id strays=""
-  for ns in "$KAGENT_NS" "$SUBSTRATE_NS" "$PODCERT_NS" "$AGW_NS" "$DEMO_MCP_NS" "$GITHUB_MCP_NS"; do
+  for ns in "$KAGENT_NS" "$AGENTS_NS" "$SUBSTRATE_NS" "$PODCERT_NS" "$AGW_NS" "$DEMO_MCP_NS" "$GITHUB_MCP_NS"; do
     # shellcheck disable=SC2310  # wrapper: k is one kubectl call
     out="$(k get pods -n "$ns" -o "jsonpath=$IMAGE_IDS" 2>&1)" ||
       { flunk "images: kubectl in $ns: $(first_line "$out")"; return 0; }
@@ -105,5 +105,6 @@ check_gateway
 check_agent stock-agent
 check_agent triage-agent
 check_agent docs-agent
+check_agent hello-agent
 check_images
 exit "$failed"

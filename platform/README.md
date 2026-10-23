@@ -29,7 +29,7 @@ Both live in `.env` in the main checkout. Set `ENV_FILE=<path>` to use another f
 | Key | Goes to | Read by |
 |---|---|---|
 | `OPENCODE_KEY` | Secret `agentgateway-system/opencode-go-key` (`make up`) | agentgateway only. kagent holds a placeholder key and calls the gateway's `/v1`. |
-| `GITHUB_TOKEN` | Secret `github-mcp/github-mcp-token` (`make deploy`) | The GitHub MCP auth proxy only. |
+| `GITHUB_TOKEN` | Secret `agents/github-mcp-token`, value `Bearer <token>` (`make deploy`) | Substrate's egress gateway only. It adds the header to the agents' `github-mcp` requests (`headersFrom` on the RemoteMCPServer). |
 
 The scripts pipe each value to `kubectl create secret` on stdin. It is never printed,
 written to disk, or put on a command line.
@@ -48,8 +48,7 @@ written to disk, or put on a command line.
 | `triage-agent.yaml` | `triage-agent` on the stock runtime: reads a GitHub issue with `issue_read` and decides. Applied by `make deploy`. |
 | `docs-agent.yaml` | `docs-agent`: AgentTemplate and Agent on `hello-harness` (Recipe 2). |
 | `agent.yaml.tmpl` | Our agent: Harness, ModelConfigs, AgentTemplates (`hello-agent` and the `explorer`, `executor`, `reviewer` subagents), and Agent `hello-agent`. `deploy.sh` fills in `@IMAGE@`. |
-| `github-mcp.yaml` | GitHub's MCP server with only `issue_read`, `create_branch`, `push_files`, `create_pull_request`, behind the auth proxy. |
-| `github-mcp-proxy.mjs` | The auth proxy. Adds the token to every request and drops any `Authorization` a caller sends. |
+| `github-mcp.yaml` | GitHub's MCP server with only `issue_read`, `create_branch`, `push_files`, `create_pull_request`. It refuses a request with no token. The RemoteMCPServer takes `Authorization` from Secret `github-mcp-token`. |
 | `demo-mcp.yaml` | A one-tool MCP server (`delete_branch`, which deletes nothing). Shows that approvals work. |
 | `egress.yaml` | Lets the agent's actor reach `github.com`, `codeload.github.com` and `registry.npmjs.org` over HTTPS. |
 
@@ -63,10 +62,10 @@ where `localhost:5001` is not the registry. It also speaks plain HTTP only to a 
 
 ```sh
 make status
-kubectl --context kind-build-coding-agent -n kagent get agents.api.kagent.dev,harnesses.api.kagent.dev
-kubectl --context kind-build-coding-agent -n github-mcp logs deploy/github-mcp -c auth-proxy
+kubectl --context kind-build-coding-agent -n agents get agents.api.kagent.dev,harnesses.api.kagent.dev
+kubectl --context kind-build-coding-agent -n github-mcp logs deploy/github-mcp
 kubectl --context kind-build-coding-agent -n demo-mcp logs deploy/demo-mcp
 ```
 
-The auth proxy logs method, path, and status per request. The demo server logs a
+The GitHub MCP server logs a line per session. The demo server logs a
 `tools-call` line per call, so you can see if an approval was honoured.

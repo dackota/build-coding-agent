@@ -51,7 +51,7 @@ Set by digest in the install values (`versions.env`, applied by `install.sh`):
 |---|---|---|---|
 | `ghcr.io/kagent-dev/kagent/controller` | 1.0.0-alpha17 | `sha256:d0c5c21998f7492fe42636c9216accc7f263ee3087729989d9b3cb78e427c5f5` | ghcr.io, tag 1.0.0-alpha17 |
 | `ghcr.io/kagent-dev/kagent/ui` | 1.0.0-alpha17 | `sha256:68dc2ec374a5250a545b85850b6d284c318e3472c73de6e419e534cdcf5b79a1` | ghcr.io, tag 1.0.0-alpha17 |
-| `ghcr.io/kagent-dev/substrate/ateworker-gvisor` (WorkerPool `kagent-default`) | v0.6.0-alpha3 | `sha256:56e6231c3ed48d54afd3068b6313a1545df1277e0ac1faa6090085cc480d573e` | ghcr.io; the CLI sets this image by tag, `install.sh` overrides it with the digest |
+| `ghcr.io/kagent-dev/substrate/ateworker-gvisor` (WorkerPools `kagent-default` and `agents-default`) | v0.6.0-alpha3 | `sha256:56e6231c3ed48d54afd3068b6313a1545df1277e0ac1faa6090085cc480d573e` | ghcr.io; the CLI sets this image by tag, `install.sh` overrides it with the digest (and fills it into `platform/agents.yaml`) |
 | `postgres` (kagent's development database) | 18-alpine | `sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15` | the alpha17 CLI's default `install.bundledPostgresImage` |
 
 Digest-pinned by the pinned charts themselves:

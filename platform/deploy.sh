@@ -15,27 +15,48 @@ GITHUB_TOKEN_NAME="GITHUB_TOKEN"
 GITHUB_MCP_NS="github-mcp"
 GITHUB_TOKEN_SECRET="github-mcp-token"
 
-# Secret github-mcp-token from GITHUB_TOKEN in .env, for the GitHub MCP server's auth proxy
-# only. Delete and create, not apply (apply would copy the token into an annotation); the
-# token reaches kubectl on stdin from printf (a builtin), so it is in no process's argv.
+# Secret github-mcp-token in the agents namespace from GITHUB_TOKEN in .env, value
+# "Bearer <token>": the Authorization header RemoteMCPServer github-mcp takes with headersFrom,
+# which Substrate's egress gateway adds to the agent's requests. Delete and create, not apply
+# (apply would copy the token into an annotation); the token reaches kubectl on stdin from
+# printf (a builtin), so it is in no process's argv.
 make_github_token_secret() {
   local token
   token="$(read_env_value "$GITHUB_TOKEN_NAME")"
   [ -n "$token" ] || fail "$GITHUB_TOKEN_NAME is missing or empty in $ENV_FILE (git out needs it; see .env.example)"
-  k create namespace "$GITHUB_MCP_NS" --dry-run=client -o yaml | k apply -f - >/dev/null
-  k delete secret "$GITHUB_TOKEN_SECRET" -n "$GITHUB_MCP_NS" --ignore-not-found >/dev/null
-  printf %s "$token" | k create secret generic "$GITHUB_TOKEN_SECRET" -n "$GITHUB_MCP_NS" \
+  k delete secret "$GITHUB_TOKEN_SECRET" -n "$AGENTS_NS" --ignore-not-found >/dev/null
+  printf 'Bearer %s' "$token" | k create secret generic "$GITHUB_TOKEN_SECRET" -n "$AGENTS_NS" \
     --from-file=token=/dev/stdin >/dev/null
-  echo "Secret $GITHUB_MCP_NS/$GITHUB_TOKEN_SECRET made from $GITHUB_TOKEN_NAME"
+  echo "Secret $AGENTS_NS/$GITHUB_TOKEN_SECRET made from $GITHUB_TOKEN_NAME"
 }
 
-# The GitHub MCP server and its auth proxy; restarted so a new token or proxy takes effect.
+# The GitHub MCP server, restarted so a new image or args take effect. Its namespace holds no
+# Secret: the old auth proxy's Secret and ConfigMap are deleted if a cluster still has them.
 deploy_github_mcp() {
-  k create configmap github-mcp-proxy -n "$GITHUB_MCP_NS" \
-    --from-file=github-mcp-proxy.mjs="$PLATFORM_DIR/github-mcp-proxy.mjs" --dry-run=client -o yaml | k apply -f -
-  sed -e "s|@NODE_IMAGE@|$NODE_IMAGE|" -e "s|@GITHUB_MCP_IMAGE@|$GITHUB_MCP_IMAGE|" "$PLATFORM_DIR/github-mcp.yaml" | k apply -f -
+  sed "s|@GITHUB_MCP_IMAGE@|$GITHUB_MCP_IMAGE|" "$PLATFORM_DIR/github-mcp.yaml" | k apply -f -
+  k delete secret "$GITHUB_TOKEN_SECRET" -n "$GITHUB_MCP_NS" --ignore-not-found
+  k delete configmap github-mcp-proxy -n "$GITHUB_MCP_NS" --ignore-not-found
   k rollout restart deployment/github-mcp -n "$GITHUB_MCP_NS"
   k rollout status deployment/github-mcp -n "$GITHUB_MCP_NS" --timeout="$READY_TIMEOUT"
+}
+
+# Builds a skill image (FROM scratch, one SKILL.md at its root), pushes it to the local
+# registry, and prints its address on the kind network pinned by digest (as for the agent image).
+push_skill_image() {
+  local repo="$1" skill_file="$2" dir ref_tag skill_digest ip
+  dir="$(mktemp -d)"
+  cp "$skill_file" "$dir/SKILL.md"
+  printf 'FROM scratch\nCOPY SKILL.md /SKILL.md\n' >"$dir/Dockerfile"
+  ref_tag="localhost:$REGISTRY_PORT/$repo:build-$(date +%s)"
+  docker build -q -t "$ref_tag" "$dir" >/dev/null
+  rm -rf "$dir"
+  docker push -q "$ref_tag" >/dev/null
+  skill_digest="$(curl -fsSI -H "Accept: $MANIFEST_TYPES" "http://localhost:$REGISTRY_PORT/v2/$repo/manifests/${ref_tag##*:}" |
+    awk 'tolower($1) == "docker-content-digest:" {print $2}' | tr -d '\r')"
+  [[ "$skill_digest" =~ ^sha256:[a-f0-9]{64}$ ]] || fail "no sha256 digest from the registry for $ref_tag (got: $skill_digest)"
+  ip="$(docker inspect -f '{{(index .NetworkSettings.Networks "kind").IPAddress}}' "$REGISTRY_NAME")"
+  [[ "$ip" =~ ^[0-9.]+$ ]] || fail "registry $REGISTRY_NAME has no address on the kind network"
+  echo "$ip:$REGISTRY_INTERNAL_PORT/$repo@$skill_digest"
 }
 
 make_github_token_secret
@@ -63,13 +84,16 @@ deploy_github_mcp
 # Egress for git over HTTPS and npm, by DNS name; no credential in it.
 k apply -f "$PLATFORM_DIR/egress.yaml"
 sed "s|@IMAGE@|$image|" "$PLATFORM_DIR/agent.yaml.tmpl" | k apply -f -
-k wait --for=condition=Ready "agent/$AGENT" -n "$KAGENT_NS" --timeout="$READY_TIMEOUT"
+k wait --for=condition=Ready "agent/$AGENT" -n "$AGENTS_NS" --timeout="$READY_TIMEOUT"
 echo "ok   Agent $AGENT is ready with $image"
-# docs-agent: a second Agent on the same hello-harness (platform/docs-agent.yaml).
-k apply -f "$PLATFORM_DIR/docs-agent.yaml"
-k wait --for=condition=Ready agent/docs-agent -n "$KAGENT_NS" --timeout="$READY_TIMEOUT"
+# docs-agent: a second Agent on the same hello-harness (platform/docs-agent.yaml), with one
+# skill that kagent mounts from a tiny image pinned by digest.
+skill_image="$(push_skill_image docs-skill "$PLATFORM_DIR/skills/docs-style/SKILL.md")"
+echo "pushed $skill_image"
+sed "s|@DOCS_SKILL_IMAGE@|$skill_image|" "$PLATFORM_DIR/docs-agent.yaml" | k apply -f -
+k wait --for=condition=Ready agent/docs-agent -n "$AGENTS_NS" --timeout="$READY_TIMEOUT"
 echo "ok   Agent docs-agent is ready"
 # triage-agent: the stock runtime, reading issues through github-mcp (issue_read only).
 k apply -f "$PLATFORM_DIR/triage-agent.yaml"
-k wait --for=condition=Ready agent/triage-agent -n "$KAGENT_NS" --timeout="$READY_TIMEOUT"
+k wait --for=condition=Ready agent/triage-agent -n "$AGENTS_NS" --timeout="$READY_TIMEOUT"
 echo "ok   Agent triage-agent is ready"

@@ -3,12 +3,16 @@
 # here: the model goes through agentgateway and the agent holds no git credential.
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
-metadata: {name: docs-agent, namespace: kagent}
+metadata: {name: docs-agent, namespace: agents}
 spec:
   description: Fixes documentation files only
   modelConfig: {name: default-model-config}
   # Short on purpose: the agent adds its own rules (tools, verification, ask_user).
   systemPrompt: You fix documentation (Markdown files). Never change code files. Change only what the task asks for.
+  # One skill from an OCI image that kagent mounts read-only; platform/deploy.sh builds and pins it.
+  skills:
+    - name: docs-style
+      source: {oci: "@DOCS_SKILL_IMAGE@"}
   tools:
     - subAgent:
         name: explorer
@@ -17,7 +21,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
-metadata: {name: docs-agent, namespace: kagent}
+metadata: {name: docs-agent, namespace: agents}
 spec:
   template: {ref: {name: docs-agent}}
   harnessRef: {name: hello-harness}

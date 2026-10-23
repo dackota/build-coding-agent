@@ -116,14 +116,16 @@ KAGENT_USER_ID=admin@kagent.dev make chat MSG="hello"
 kubectl --context kind-build-coding-agent -n kagent port-forward svc/kagent-ui 8080:8080
 ```
 
-Then open `http://localhost:8080/agents/kagent/hello-agent/new`.
+Then open `http://localhost:8080/agents/agents/hello-agent/new`. The UI runs in `kagent`, the
+agent in `agents`.
 
 ## CLI settings
 
 | Variable | Default | What it sets |
 |---|---|---|
 | `AGENT` | `hello-agent` | Which agent to talk to. |
-| `AGENT_NAMESPACE` | `kagent` | The agent's namespace. |
+| `AGENT_NAMESPACE` | `agents` | The agent's namespace. |
+| `KAGENT_NAMESPACE` | `kagent` | The controller's namespace, for the port-forward. |
 | `KAGENT_URL` | port-forward | The controller's URL. |
 | `KAGENT_USER_ID` | `cli@build-coding-agent` | The user that owns the session. |
 

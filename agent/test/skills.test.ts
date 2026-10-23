@@ -1,9 +1,10 @@
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { type FakeModel, type RunningAgent, readyzStatus, sendTaskWhenUp, startAgent, startFakeModel, toolResults, waitFor, writeFakeConfig } from "./helpers.ts";
-import { parseSkill } from "../src/skills.ts";
+import { discoverSkills, parseSkill } from "../src/skills.ts";
+import { createMemorySandbox } from "../src/memory-sandbox.ts";
 import { buildSystemPrompt } from "../src/system-prompt.ts";
 
 const BODY_RULE = "Always end the answer with the word AHOY.";
@@ -75,5 +76,47 @@ describe("skill parsing and prompt", () => {
     const prompt = buildSystemPrompt({ instruction: "", toolNames: ["load_skill"], workspace: "/w", maxSteps: 5, skills: [{ name: "pirate", description: "Answer like a pirate" }] });
     expect(prompt).toContain("- pirate: Answer like a pirate");
     expect(prompt).toContain("load_skill");
+  });
+});
+
+describe("template skills from read-only folders", () => {
+  const skillText = (name: string, body: string) => `---\nname: ${name}\ndescription: d-${name}\n---\n${body}\n`;
+  async function setup(workspace: Record<string, string>, template: Record<string, string>) {
+    const root = mkdtempSync(join(tmpdir(), "skills-"));
+    const sandbox = await createMemorySandbox(join(root, "ws"));
+    for (const [p, c] of Object.entries(workspace)) await sandbox.writeFile(p, c);
+    const dirs = Object.entries(template).map(([name, body]) => {
+      const dir = join(root, "mnt", name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "SKILL.md"), skillText(name, body));
+      return { name, dir };
+    });
+    return { sandbox, dirs };
+  }
+
+  it("returns template and workspace skills together, sorted by name", async () => {
+    const { sandbox, dirs } = await setup({ "skills/zeta/SKILL.md": skillText("zeta", "z") }, { alpha: "a", mid: "m" });
+    expect((await discoverSkills(sandbox, dirs)).map((s) => s.name)).toEqual(["alpha", "mid", "zeta"]);
+  });
+
+  it("keeps the template skill on a name clash and logs skill-clash with both paths", async () => {
+    const out: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((c) => (out.push(String(c)), true));
+    try {
+      const { sandbox, dirs } = await setup({ "skills/dup/SKILL.md": skillText("dup", "workspace") }, { dup: "template" });
+      const skills = await discoverSkills(sandbox, dirs);
+      expect(skills).toHaveLength(1);
+      expect(skills[0]!.body).toBe("template\n");
+      const clash = out.map((l) => JSON.parse(l) as Record<string, string>).find((e) => e.event === "skill-clash");
+      expect(clash?.kept).toBe(join(dirs[0]!.dir, "SKILL.md"));
+      expect(clash?.dropped).toBe("skills/dup/SKILL.md");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("behaves as today without template skills", async () => {
+    const { sandbox } = await setup({ "skills/solo/SKILL.md": skillText("solo", "s") }, {});
+    expect((await discoverSkills(sandbox)).map((s) => s.name)).toEqual(["solo"]);
   });
 });

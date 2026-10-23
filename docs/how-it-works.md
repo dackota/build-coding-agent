@@ -19,7 +19,7 @@ you ── make chat ──> kagent controller ──> Substrate actor ──> a
 | **Agent Substrate** | Runs each session as an **actor**: a sandboxed process (gVisor) that is frozen to a snapshot when idle and restored on the next message. | Each session gets its own isolated machine. Idle sessions cost nothing. |
 | **agentgateway** | A proxy in front of the model provider (the OpenCode Go plan). Holds the model key. | The agent and kagent never see the key. |
 | **The agent** (`agent/`) | Our code. A Node 24 TypeScript program that kagent runs as a `byo` image. It speaks A2A over gRPC. | This is the part the course teaches us to build. |
-| **GitHub MCP server** | GitHub's own MCP server, behind a small proxy that adds the token. | The agent can push and open PRs without ever holding the token. |
+| **GitHub MCP server** | GitHub's own MCP server. Substrate's egress gateway adds the token from a Secret (`headersFrom` on its RemoteMCPServer) as each request leaves the actor. | The agent can push and open PRs without ever holding the token. |
 | **Local registry** | `registry:2` on `localhost:5001`. | `make deploy` pushes the agent image here and names it by digest. |
 
 ## What happens when you send a message
@@ -48,7 +48,7 @@ The agent saves the session after every model step. A crash or a suspend loses a
 | `bash` | Runs a shell command in the workspace. Read-only commands (`ls`, `cat`, `grep`, `git status`, ...) run at once. Anything else pauses for your approval. 60 s timeout. |
 | `ask_user` | Pauses and asks you a question, with choices when there are a few options. |
 | `todo_write` | Keeps the turn's to-do list. |
-| `load_skill` | Loads a skill's full text. Skills are `skills/<name>/SKILL.md` files in the workspace. Only their names and descriptions are in the prompt. |
+| `load_skill` | Loads a skill's full text. Skills are `SKILL.md` files from the template's mounted skill images and from `skills/<name>/` in the workspace; the template wins a name clash. Only their names and descriptions are in the prompt. |
 | `task` | Hands a job to a subagent (see below). |
 | MCP tools | Tools from MCP servers bound on the `AgentTemplate`. Today: `create_branch`, `push_files`, `create_pull_request` (GitHub) and `delete_branch` (a demo that deletes nothing). Each call pauses for approval. |
 | Extension tools | Tools added by modules in `agent/extensions/`. See [extensions.md](extensions.md). |
@@ -72,7 +72,8 @@ nesting is one level deep.
 - **Approval gate.** Risky `bash` commands and every bound MCP tool pause until you approve.
   The tool checks the gate again when it runs, so an unapproved call never runs.
 - **No credentials in the actor.** The model key is in agentgateway. The GitHub token is in
-  the MCP proxy. The agent's config, env, and logs hold neither.
+  Secret `agents/github-mcp-token`, which only Substrate's egress gateway reads. The agent's
+  config and env hold a placeholder, and its logs hold neither.
 - **Narrow egress.** The actor can reach only `github.com`, `codeload.github.com` and
   `registry.npmjs.org` (`platform/egress.yaml`). So `git clone` works for public repos only.
 - **Extensions.** `protect-env` blocks file-tool writes to `.env` files. `redact-env` hides

@@ -19,7 +19,9 @@ MAIN_CHECKOUT="$(dirname "$(git -C "$ROOT" rev-parse --path-format=absolute --gi
 ENV_FILE="${ENV_FILE:-$MAIN_CHECKOUT/.env}"
 KEY_NAME="OPENCODE_KEY"
 
+# kagent's own install (the controller); every agent of ours lives in AGENTS_NS (platform/agents.yaml).
 KAGENT_NS="kagent"
+AGENTS_NS="agents"
 SUBSTRATE_NS="ate-system"
 AGW_NS="agentgateway-system"
 KEY_SECRET="opencode-go-key"

@@ -5,7 +5,13 @@ import type { AddressInfo } from "node:net";
 
 /** `result` is the tool's reply text, or a function of the call's arguments. */
 export type FakeMcpTool = { name: string; description: string; result: string | ((args: any) => string) };
-export type FakeMcp = { url: string; calls: { name: string; args: unknown }[]; close: () => Promise<void> };
+export type FakeMcp = {
+  url: string;
+  calls: { name: string; args: unknown }[];
+  /** Every JSON-RPC request with the HTTP headers it came with. */
+  requests: { method: string; headers: Record<string, string | string[] | undefined> }[];
+  close: () => Promise<void>;
+};
 
 type RpcRequest = { jsonrpc: "2.0"; id?: number | string; method: string; params?: { name?: string; arguments?: unknown } };
 
@@ -34,6 +40,7 @@ function answer(req: RpcRequest, tools: FakeMcpTool[], calls: FakeMcp["calls"]):
 
 export async function startFakeMcp(tools: FakeMcpTool[]): Promise<FakeMcp> {
   const calls: FakeMcp["calls"] = [];
+  const requests: FakeMcp["requests"] = [];
   const server: Server = createServer((req, res) => {
     if (req.method !== "POST") {
       res.writeHead(405).end();
@@ -43,6 +50,7 @@ export async function startFakeMcp(tools: FakeMcpTool[]): Promise<FakeMcp> {
     req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => {
       const rpc = JSON.parse(Buffer.concat(chunks).toString("utf8")) as RpcRequest;
+      requests.push({ method: rpc.method, headers: { ...req.headers } });
       if (rpc.id === undefined) {
         res.writeHead(202).end();
         return;
@@ -56,6 +64,7 @@ export async function startFakeMcp(tools: FakeMcpTool[]): Promise<FakeMcp> {
   return {
     url: `http://127.0.0.1:${port}/mcp`,
     calls,
+    requests,
     close: () =>
       new Promise((r) => {
         server.closeAllConnections();

@@ -3,7 +3,7 @@
 # only public repos can be cloned. Applied by deploy.sh.
 apiVersion: api.kagent.dev/v1alpha3
 kind: EgressPolicy
-metadata: {name: agent-git-egress, namespace: kagent}
+metadata: {name: agent-git-egress, namespace: agents}
 spec:
   destinations:
     - origin: https://github.com
