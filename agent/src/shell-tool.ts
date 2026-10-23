@@ -111,9 +111,10 @@ export function createShellTool(sandbox: Sandbox, gate: ApprovalGate) {
         log("shell-refused", { toolCallId, command: command.slice(0, MAX_LOGGED_COMMAND), risk: kinds.join(",") });
         throw new Error(`refused: "${command}" is risky (${kinds.join(", ")}) and has no approval`);
       }
-      const { stdout, stderr, exitCode } = await sandbox.exec(command);
+      const { stdout, stderr, exitCode, hasTimedOut } = await sandbox.exec(command);
       log("shell", { toolCallId, command: command.slice(0, MAX_LOGGED_COMMAND), risk: kinds.join(","), exitCode });
-      return capped(`exit code: ${exitCode}\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+      const timeoutNote = hasTimedOut ? `timed out after ${EXEC_TIMEOUT_MS / 1000} seconds: the command was stopped, so the output below is partial\n` : "";
+      return capped(`${timeoutNote}exit code: ${exitCode}\nstdout:\n${stdout}\nstderr:\n${stderr}`);
     },
   });
 }

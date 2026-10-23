@@ -240,10 +240,10 @@ export type TaskReply = {
 };
 
 /** One SendMessage with a task text and files attached as raw parts named by their workspace path. */
-export async function sendTask(port: number, text: string, files: Record<string, string> = {}, contextId = ""): Promise<TaskReply> {
+export async function sendTask(port: number, text: string, files: Record<string, string | Buffer> = {}, contextId = ""): Promise<TaskReply> {
   const client = await grpcClient(port);
   const fileParts = Object.entries(files).map(([filename, content]) => ({
-    content: { $case: "raw" as const, value: Buffer.from(content, "utf8") },
+    content: { $case: "raw" as const, value: typeof content === "string" ? Buffer.from(content, "utf8") : content },
     metadata: undefined,
     filename,
     mediaType: "text/plain",
@@ -270,7 +270,7 @@ export async function sendTask(port: number, text: string, files: Record<string,
 }
 
 /** Retries sendTask until the agent answers (it may still be starting). */
-export async function sendTaskWhenUp(port: number, text: string, files: Record<string, string> = {}, contextId = ""): Promise<TaskReply> {
+export async function sendTaskWhenUp(port: number, text: string, files: Record<string, string | Buffer> = {}, contextId = ""): Promise<TaskReply> {
   const got = await waitFor(async () => {
     try {
       return await sendTask(port, text, files, contextId);

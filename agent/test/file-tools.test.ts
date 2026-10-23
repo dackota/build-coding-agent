@@ -152,3 +152,14 @@ it("with the in-memory sandbox the diff comes back and the disk is untouched", a
   const ws = workspace(dataDir, got.contextId);
   expect(existsSync(join(ws, "greet.js"))).toBe(false);
 });
+
+it("keeps the exact bytes of a binary file sent in the message", async () => {
+  const { dataDir } = await boot(["Got it."]);
+  // 0x80-0xff alone are not valid UTF-8: a text decode would turn each into U+FFFD.
+  const bytes = Buffer.from([0x00, 0xff, 0xfe, 0x80, 0x89, 0x50, 0x4e, 0x47, 0xc3, 0x28, 0x0d, 0x0a, 0x1a]);
+
+  const got = await sendTaskWhenUp(agent!.grpcPort, "How big is blob.bin?", { "blob.bin": bytes });
+
+  expect(got.state).toBe(TaskState.TASK_STATE_COMPLETED);
+  expect(readFileSync(join(workspace(dataDir, got.contextId), "blob.bin"))).toEqual(bytes);
+});

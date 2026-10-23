@@ -112,3 +112,24 @@ it("redirects and command substitution need approval even after a safe program",
     expect(await needs(command), command).toBe(false);
   }
 });
+
+it("tells the model when a command was stopped for running too long", async () => {
+  const sandbox: Sandbox = {
+    ...recordingSandbox(),
+    exec: async () => ({ stdout: "partial output\n", stderr: "", exitCode: 1, hasTimedOut: true }),
+  };
+  const shell = createShellTool(sandbox, neverApproved);
+
+  const result = String(await shell.execute!({ command: "ls" }, options("call-1")));
+
+  expect(result).toMatch(/timed out after 60 seconds/i);
+  expect(result).toContain("partial output");
+});
+
+it("says nothing about a timeout when the command finished", async () => {
+  const shell = createShellTool(recordingSandbox(), neverApproved);
+
+  const result = String(await shell.execute!({ command: "ls" }, options("call-1")));
+
+  expect(result).not.toMatch(/timed out/i);
+});

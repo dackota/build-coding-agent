@@ -98,7 +98,7 @@ EXAMPLES:
   }),
 });
 
-type Attachment = { path: string; content: string };
+type Attachment = { path: string; content: Uint8Array };
 
 /** The message's text, and the files it carries (raw parts with a file name). */
 function readMessage(message: Message): { text: string; files: Attachment[] } {
@@ -106,7 +106,7 @@ function readMessage(message: Message): { text: string; files: Attachment[] } {
   const files: Attachment[] = [];
   for (const p of message.parts) {
     if (p.content?.$case === "text") texts.push(p.content.value);
-    else if (p.content?.$case === "raw" && p.filename) files.push({ path: p.filename, content: Buffer.from(p.content.value).toString("utf8") });
+    else if (p.content?.$case === "raw" && p.filename) files.push({ path: p.filename, content: p.content.value });
   }
   return { text: texts.join("\n"), files };
 }
