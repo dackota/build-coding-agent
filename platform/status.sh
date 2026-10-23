@@ -10,8 +10,6 @@ WAIT="${STATUS_TIMEOUT:-10s}"
 PODCERT_NS="podcertificate-controller-system"
 # The demo MCP server make deploy runs (platform/demo-mcp.yaml); empty before the first deploy.
 DEMO_MCP_NS="demo-mcp"
-# The GitHub MCP server make deploy runs (platform/github-mcp.yaml); empty before the first deploy.
-GITHUB_MCP_NS="github-mcp"
 LOCK_FILE="$PLATFORM_DIR/images.lock"
 failed=0
 releases=""

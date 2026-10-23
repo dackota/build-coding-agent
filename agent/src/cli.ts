@@ -34,11 +34,11 @@ async function freePort(): Promise<number> {
   });
 }
 
-async function openForward(namespace: string): Promise<{ baseUrl: string; child: ChildProcess }> {
+async function openForward(controllerNamespace: string): Promise<{ baseUrl: string; child: ChildProcess }> {
   const port = await freePort();
   const child = spawn(
     "kubectl",
-    ["--context", CONTEXT, "port-forward", "-n", namespace, "svc/kagent-controller", `${port}:${CONTROLLER_A2A_PORT}`],
+    ["--context", CONTEXT, "port-forward", "-n", controllerNamespace, "svc/kagent-controller", `${port}:${CONTROLLER_A2A_PORT}`],
     { stdio: ["ignore", "ignore", "inherit"] },
   );
   const deadline = Date.now() + FORWARD_WAIT_MS;
@@ -188,7 +188,7 @@ const CTRL_C_EXIT_CODE = 130;
 const ARGS_PREVIEW_CHARS = 120;
 // Two namespaces: the controller's (kagent's install) for the port-forward, the agent's for its path.
 const controllerNamespace = process.env.KAGENT_NAMESPACE || DEFAULT_CONTROLLER_NAMESPACE;
-const namespace = process.env.AGENT_NAMESPACE || DEFAULT_AGENT_NAMESPACE;
+const agentNamespace = process.env.AGENT_NAMESPACE || DEFAULT_AGENT_NAMESPACE;
 const agent = process.env.AGENT ?? "hello-agent";
 const forward = process.env.KAGENT_URL ? undefined : await openForward(controllerNamespace);
 const baseUrl = process.env.KAGENT_URL || forward!.baseUrl;
@@ -222,7 +222,7 @@ process.once("SIGINT", () => {
   abort.abort();
   void (async () => {
     if (ids?.taskId) {
-      await cancelTask({ baseUrl, namespace, agent, taskId: ids.taskId }).catch((err: Error) => console.error(`could not cancel the turn: ${err.message}`));
+      await cancelTask({ baseUrl, namespace: agentNamespace, agent, taskId: ids.taskId }).catch((err: Error) => console.error(`could not cancel the turn: ${err.message}`));
     }
     if (ids?.contextId) console.error(`\ncontext=${ids.contextId}\ninterrupted; continue with: --context ${ids.contextId} "<message>"`);
     forward?.child.kill();
@@ -232,7 +232,7 @@ process.once("SIGINT", () => {
 
 try {
   const turn = await sendWithRetry(
-    () => sendTurn({ baseUrl, namespace, agent, text, files, contextId, reply, approval, onEvent: show, onIds: (got) => (ids = got), signal: abort.signal }),
+    () => sendTurn({ baseUrl, namespace: agentNamespace, agent, text, files, contextId, reply, approval, onEvent: show, onIds: (got) => (ids = got), signal: abort.signal }),
     abort.signal,
   );
   if (hasStreamedText && !isAtLineStart) process.stdout.write("\n");

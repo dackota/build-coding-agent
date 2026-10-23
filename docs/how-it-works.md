@@ -8,7 +8,7 @@ you ── make chat ──> kagent controller ──> Substrate actor ──> a
                          agentgateway <── model calls ────────────┤
                          (holds OPENCODE_KEY)                     │
                          GitHub MCP server <── branch/push/PR ────┤
-                         (holds GITHUB_TOKEN)                     │
+                         (egress gateway adds the token)          │
                          github.com, npm <── git clone, installs ─┘
 ```
 
