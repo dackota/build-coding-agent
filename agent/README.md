@@ -43,3 +43,20 @@ Context management (`src/context.ts`):
 - Each model step logs one `step-usage` line: `step`, `inputTokens`, `outputTokens`, `cachedTokens` (0 when the gateway reports none).
 
 Prompt caching decision: not requested by the agent, because the provider does it by itself. The agent sends no `cache_control` markers. The OpenCode Go plan (model `glm-5.3-flash`) caches repeated prompt prefixes on its own and reports them as `usage.prompt_tokens_details.cached_tokens`; agentgateway passes that field through unchanged, and `@ai-sdk/openai-compatible` maps it to the `cachedTokens` in the `step-usage` line. Evidence on kind: a 15680-token prompt sent through the gateway twice more returned `usage.prompt_tokens_details.cached_tokens: 12160` both times (a first send of it, not saved, returned 0). Responses: `.scratch/s2-spike/verify/9-r2/gateway-response-1.json` and `gateway-response-2.json`. The short prefixes of the agent's own turns (about 1300 tokens) showed `cachedTokens: 0` in the live runs; a longer session should show hits in the log.
+
+## Writing an extension
+
+An extension is a TypeScript module in the extensions directory (`AGENT_EXTENSIONS_DIR`; default the `extensions` directory beside `src`, `/app/extensions` in the image). At startup the agent loads each `.ts` file there, sorted by file name, and calls its default export with the extension API. Extensions are trusted operator code: they load only from the image, never from the workspace. Startup stops, naming the file or directory, when a tool name is already taken (by another extension or by any built-in, `load_skill` and `task` included even on turns that do not build them), a module has no default function, setup throws, `AGENT_EXTENSIONS_DIR` is missing, or it is under `AGENT_DATA_DIR`.
+
+```ts
+import { tool } from "ai";
+import { z } from "zod";
+import type { ExtensionApi } from "../src/extensions.ts";
+
+export default function (api: ExtensionApi): void {
+  api.registerTool("now", (ctx) => // ctx.sandbox is the turn's Sandbox
+    tool({ description: "Current UTC time.", inputSchema: z.object({}), execute: async () => new Date().toISOString() }));
+}
+```
+
+`registerTool(name, factory)` adds the tool after the built-ins, so the system prompt's `- Tools:` line lists it last. An MCP tool with the same name is dropped for the turn. The log has one `extension-loaded` line per extension (file name and tool names only). The image ships `extensions/now.ts`, a `now` tool that returns the current UTC time in ISO 8601. Use `import type` for anything from `../src/`.

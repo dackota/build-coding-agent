@@ -13,6 +13,7 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN corepack enable && corepack install -g "$(node -p 'require("./package.json").packageManager')" && pnpm install --frozen-lockfile --prod
 COPY src ./src
+COPY extensions ./extensions
 # Session state (pending pauses) lives here; an actor snapshot keeps it across suspend and wake.
 RUN mkdir -p /data
 ENV AGENT_DATA_DIR=/data

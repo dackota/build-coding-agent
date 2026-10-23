@@ -8,7 +8,9 @@ import { describeConfig, loadConfigFromEnv, loadRuntimeFromEnv, parseMcpBindings
 import { ControllerTaskStore, DEFAULT_IDENTITY_PATH } from "./controller-task-store.ts";
 import { DEFAULT_MAX_TOOL_OUTPUT_CHARS, TRUNCATION_MARKER } from "./context.ts";
 import { createExecutor, type ExecutorOptions } from "./executor.ts";
+import { loadExtensions } from "./extensions.ts";
 import { log } from "./log.ts";
+import { fileURLToPath } from "node:url";
 
 export type ServerOptions = { env: NodeJS.ProcessEnv; grpcAddr: string; listener: EarlyListener; cardJson?: string };
 
@@ -64,7 +66,9 @@ export async function startServer(opts: ServerOptions): Promise<{ server: grpc.S
     // URLs and tool names only: headers may carry credentials.
     mcp: JSON.stringify(mcpBindings.map((b) => ({ url: b.url, tools: b.tools, requireApproval: b.requireApproval }))),
   });
-  const executor = createExecutor(config, dataDir, executorOptions(opts.env), mcpBindings);
+  const extensionsDir = opts.env.AGENT_EXTENSIONS_DIR ?? fileURLToPath(new URL("../extensions", import.meta.url));
+  const extensions = await loadExtensions(extensionsDir, dataDir);
+  const executor = createExecutor(config, dataDir, executorOptions(opts.env), mcpBindings, extensions);
   const handler = new DefaultRequestHandler(buildCard(opts.grpcAddr, opts.cardJson), tasks, executor);
   const server = new grpc.Server();
   server.addService(A2AService, grpcService({ requestHandler: handler, userBuilder: UserBuilder.noAuthentication }));

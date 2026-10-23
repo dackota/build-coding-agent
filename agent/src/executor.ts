@@ -20,6 +20,7 @@ import { type AskUserPause, loadSession, saveSession, type SessionState, type To
 import { openMcpTools } from "./mcp-tools.ts";
 import { type ApprovalGate, createShellTool, SHELL_TOOL } from "./shell-tool.ts";
 import { createTaskTool } from "./subagents.ts";
+import { type LoadedExtension, registerExtensionTools } from "./extensions.ts";
 import { createToolRegistry, type ToolRegistry, type TurnContext } from "./tool-registry.ts";
 import { EVENT_KEY, type StreamEvent } from "./stream-events.ts";
 import { ChangeTracker } from "./workspace-diff.ts";
@@ -175,10 +176,12 @@ export function createExecutor(
   dataDir: string,
   opts: ExecutorOptions,
   mcpBindings: readonly McpBinding[] = [],
+  extensions: readonly LoadedExtension[] = [],
 ): AgentExecutor & { shutdown(): Promise<void> } {
   const model = gatewayModel(config.baseUrl, config.model);
   const registry = createToolRegistry();
   registerBuiltins(registry, config, opts);
+  registerExtensionTools(registry, extensions);
   const sandboxes = new Map<string, Promise<Sandbox>>();
   /** The running turn of each task, so CancelTask can stop it. */
   const running = new Map<string, { abort: AbortController; contextId: string }>();
