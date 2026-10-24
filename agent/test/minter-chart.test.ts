@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseAllDocuments } from "yaml";
 import { describe, expect, it } from "vitest";
-import { find, type K8sObject, PLATFORM_DIR, render, TEAMS_CHART, valuesFile } from "./chart-helpers.ts";
+import { AGENT_CHART, find, type K8sObject, PLATFORM_DIR, render, TEAMS_CHART, valuesFile } from "./chart-helpers.ts";
 
 const WORKER = "ghcr.io/kagent-dev/substrate/ateworker-gvisor:v0.6.0-alpha3@sha256:56e6231c3ed48d54afd3068b6313a1545df1277e0ac1faa6090085cc480d573e";
 const NODE = "node:24-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205";
@@ -132,5 +132,20 @@ describe("keyed model route", () => {
     const auth = policy.spec.traffic.apiKeyAuthentication;
     expect(auth.mode).toBe("Strict");
     expect(auth.configMapSelector.matchLabels).toEqual(keys.metadata.labels);
+  });
+});
+
+describe("catalog MCP servers", () => {
+  it("the minter covers exactly the servers the agent chart's catalog names", () => {
+    const helpers = readFileSync(join(AGENT_CHART, "templates", "_helpers.tpl"), "utf8");
+    const block = /define "agent\.mcpServers" -}}\n([\s\S]*?)\n\{\{-\s*end/.exec(helpers)![1]!;
+    const catalogServers = [...block.matchAll(/^([a-z0-9-]+): \{path:/gm)].map((m) => m[1]!).sort();
+    const r = renderTeams();
+    expect(r.ok, r.output).toBe(true);
+    const cron = r.objects.find((o) => o.kind === "CronJob")!;
+    const env = cron.spec.jobTemplate.spec.template.spec.containers[0].env as { name: string; value: string }[];
+    const backends = env.find((e) => e.name === "MINTER_MCP_BACKENDS")!.value.split(",").sort();
+    expect(catalogServers.length).toBeGreaterThan(0);
+    expect(backends).toEqual(catalogServers);
   });
 });

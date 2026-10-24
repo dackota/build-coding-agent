@@ -27,7 +27,6 @@ export interface KubeClient {
   deleteMcpPolicy(namespace: string, name: string): Promise<void>;
 }
 
-const POLICIES = (namespace: string) => `/apis/agentgateway.dev/v1alpha1/namespaces/${encodeURIComponent(namespace)}/agentgatewaypolicies`;
 type RawPolicy = { metadata?: RawMeta; spec?: { targetRefs?: TargetRef[]; backend?: { mcp?: { authorization?: { action?: string; policy?: { matchExpressions?: string[] } } } } } };
 
 /** The policy as the minter wrote it; a policy that is not an Allow rule reads as no rule. */
@@ -63,6 +62,7 @@ export class KubeError extends Error {
 
 const meta = (m: RawMeta = {}): ObjectMeta => ({ name: m.name ?? "", labels: m.labels ?? {}, annotations: m.annotations ?? {} });
 const enc = encodeURIComponent;
+const POLICIES = (namespace: string) => `/apis/agentgateway.dev/v1alpha1/namespaces/${enc(namespace)}/agentgatewaypolicies`;
 
 /** The API server as the pod sees it: its Service address, the ServiceAccount's token and CA. */
 export function inClusterKube(env: NodeJS.ProcessEnv = process.env): KubeClient {

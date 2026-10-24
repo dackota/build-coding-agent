@@ -1,11 +1,10 @@
 // platform/caps.sh, the token-cap lines of make status: each agent's and team's use against
 // its cap, read from the ratelimit config and Redis's counters. kubectl is a stand-in on PATH.
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { PLATFORM_DIR } from "./chart-helpers.ts";
+import { fakeBin } from "./helpers.ts";
 
 const month = (n: number) => ({ unit: "month", requests_per_unit: n });
 const CONFIG = {
@@ -19,13 +18,11 @@ const CONFIG = {
 
 /** A kubectl that answers the three calls caps.sh makes: the config, the counter keys, a counter. */
 function fakeKubectl(config: string, counters: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), "fake-kubectl-"));
-  const file = join(dir, "kubectl");
   const cases = Object.entries(counters)
     .map(([k, v]) => (v === "__FAIL__" ? `  *"GET ${k}") echo "connection refused" >&2; exit 1 ;;` : `  *"GET ${k}") echo ${v} ;;`))
     .join("\n");
-  writeFileSync(
-    file,
+  return fakeBin(
+    "kubectl",
     `#!/usr/bin/env bash
 case "$*" in
   *"get configmap ratelimit-config"*) printf '%s' '${config}' ;;
@@ -35,8 +32,6 @@ ${cases}
 esac
 `,
   );
-  chmodSync(file, 0o755);
-  return dir;
 }
 
 function capsSh(bin: string) {

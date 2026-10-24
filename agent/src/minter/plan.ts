@@ -59,7 +59,7 @@ export const hashKey = (key: string): string => `sha256:${createHash("sha256").u
 export const randomKey = (): string => randomBytes(KEY_BYTES).toString("base64url");
 
 const idOf = (team: string, agent: string) => `${team}/${agent}`;
-const limitId = (l: { scope: string; team: string; agent: string }) => `${l.scope}/${l.team}/${l.agent}`;
+export const limitId = (l: { scope: string; team: string; agent: string }) => `${l.scope}/${l.team}/${l.agent}`;
 const isTokenCount = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n > 0;
 
 /** The agent's MCP tool policy in agentgateway (one per agent: policies on a backend merge). */

@@ -11,7 +11,7 @@ it must be small and narrowly scoped.
 ## Decision
 
 The minter is a TypeScript CronJob in `platform-system`, run every minute from
-`agent/src/minter/`. Its core is a pure function, `plan(registrations, budgets, current)`
+`agent/src/minter/`. Its core is a pure function, `plan(registrations, teams, current, newKey, budgets)`
 that returns changes; a thin Kubernetes adapter reads the inputs and applies them. It owns the
 key Secret, the key hash, the ratelimit entries, and the tool policy per agent. Its RBAC is
 scoped to exactly those writes.

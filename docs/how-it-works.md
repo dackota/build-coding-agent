@@ -8,7 +8,7 @@ you ── make chat ──> kagent controller ──> Substrate actor ──> a
                          agentgateway <── model calls ────────────┤
                          (holds OPENCODE_KEY)                     │
                          GitHub MCP server <── branch/push/PR ────┤
-                         (egress gateway adds the token)          │
+                         (agentgateway adds the token)            │
                          github.com, npm <── git clone, installs ─┘
 ```
 
@@ -50,7 +50,7 @@ The agent saves the session after every model step. A crash or a suspend loses a
 | `todo_write` | Keeps the turn's to-do list. |
 | `load_skill` | Loads a skill's full text. Skills are `SKILL.md` files from the template's mounted skill images and from `skills/<name>/` in the workspace; the template wins a name clash. Only their names and descriptions are in the prompt. |
 | `task` | Hands a job to a subagent (see below). |
-| MCP tools | Tools from MCP servers bound on the `AgentTemplate`. Today: `create_branch`, `push_files`, `create_pull_request` (GitHub) and `delete_branch` (a demo that deletes nothing). Each call pauses for approval. |
+| MCP tools | Tools from MCP servers bound on the `AgentTemplate`. Today: `create_branch`, `push_files`, `create_pull_request` (GitHub) and `delete_branch` (a demo that deletes nothing). Every write tool pauses for approval, and so does any tool with `requireApproval: true`. |
 | Extension tools | Tools added by modules in `agent/extensions/`. See [extensions.md](extensions.md). |
 
 ## Subagents
@@ -69,7 +69,7 @@ nesting is one level deep.
 
 ## Safety: what stops the agent doing harm
 
-- **Approval gate.** Risky `bash` commands and every bound MCP tool pause until you approve.
+- **Approval gate.** Risky `bash` commands and every MCP write tool pause until you approve.
   The tool checks the gate again when it runs, so an unapproved call never runs.
 - **No credentials in the actor.** The provider key is in agentgateway. Each agent's own key
   (the minter's, Secret `<agent>-agent-key`) is added by Substrate's egress gateway as a model

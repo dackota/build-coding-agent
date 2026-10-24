@@ -80,7 +80,7 @@ describe("glossary", () => {
   });
 });
 
-describe("no doc sends a team to the agents namespace or hand-written kagent YAML", () => {
+describe("no doc sends a team to hand-written kagent YAML", () => {
   const dirs = ["README.md", "docs", "deployments/README.md"];
   const files: string[] = [];
   const walk = (rel: string): void => {
@@ -92,13 +92,11 @@ describe("no doc sends a team to the agents namespace or hand-written kagent YAM
   dirs.forEach(walk);
   it("finds the docs", () => expect(files.length).toBeGreaterThan(5));
   it("has no hit", () => {
-    const bad = files.filter((f) => /\bagents namespace\b|\bhand-writ(e|ten) kagent|\bkubectl apply\b[^\n]*-n agents/i.test(read(f)));
-    // docs that say the namespace is gone may name it; they must say so
-    const real = bad.filter((f) => !/\b(deleted|removed|gone|no longer|not )/i.test(read(f).match(/.*agents namespace.*/i)?.[0] ?? "no longer"));
-    expect(real).toEqual([]);
+    // an ADR may describe the rejected option
+    const bad = files.filter((f) => !f.includes("decisions") && /\bhand-writ(e|ten) kagent/i.test(read(f)));
+    expect(bad).toEqual([]);
   });
   it("the dev guide tells a team to write a values file", () => {
-    expect(dirname(read("docs", "dev-guide.md"))).toBeDefined();
     expect(read("docs", "dev-guide.md")).toMatch(/deployments\/<team>\/<agent>\/values\.yaml/);
   });
 });

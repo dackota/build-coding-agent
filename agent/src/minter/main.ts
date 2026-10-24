@@ -1,7 +1,8 @@
 // The minter's CronJob entrypoint (platform/charts/teams/templates/minter.yaml): one run that
 // gives every registered agent of a listed team its own model key and MCP tool policy, and
-// removes the keys and policies of agents that are gone. It logs one JSON line per change, never a key, and exits non-zero on
-// any failure; the next run (a minute later) converges from wherever this one stopped.
+// removes the keys and policies of agents that are gone. It logs one JSON line per change,
+// never a key, and exits non-zero on any failure; the next run (a minute later) converges
+// from wherever this one stopped.
 import { readFileSync } from "node:fs";
 import { runOnce, type MinterConfig } from "./adapter.ts";
 import { inClusterKube } from "./kube.ts";

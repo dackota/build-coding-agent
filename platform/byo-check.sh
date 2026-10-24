@@ -20,7 +20,7 @@ INSTRUCTION="You are the contract check's agent. Reply briefly."
 IMAGE_PATTERN='^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+(@sha256:[a-f0-9]{64}|:[A-Za-z0-9._-]+)$'
 # Addresses on the kind network's private ranges: make byo-push prints the registry this way,
 # but the nodes pull it as localhost:<port> (cluster.sh points containerd there).
-PRIVATE_REGISTRY_PATTERN='^(10(\.[0-9]{1,3}){3}|172\.(1[6-9]|2[0-9]|3[01])(\.[0-9]{1,3}){2}|192\.168(\.[0-9]{1,3}){2}):5000/'
+PRIVATE_REGISTRY_PATTERN="^(10(\\.[0-9]{1,3}){3}|172\\.(1[6-9]|2[0-9]|3[01])(\\.[0-9]{1,3}){2}|192\\.168(\\.[0-9]{1,3}){2}):${REGISTRY_INTERNAL_PORT}/"
 
 image="${1:-}"
 [ -n "$image" ] || fail "usage: byo-check.sh IMAGE (make byo-check IMAGE=...)"

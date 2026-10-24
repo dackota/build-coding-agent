@@ -3,13 +3,15 @@
 import { createServer, type Server } from "node:http";
 import * as grpc from "@grpc/grpc-js";
 import { taskStoreMethods, type Task } from "../wire.ts";
-import type { ControllerCall, ModelRequest } from "./rules.ts";
+import { type ControllerCall, type ModelRequest, PLACEHOLDER_BEARER } from "./rules.ts";
 
 export const SCRIPTED_REPLY = "The contract check says forty-two.";
 // TaskState numbers: completed, failed, canceled, rejected are terminal; input- and auth-required wait.
 const TERMINAL = new Set([3, 4, 5, 7]);
 const WAITING = new Set([6, 8]);
-const PLACEHOLDER_BEARER = "Bearer placeholder";
+
+// The fields of the task store requests the stub reads.
+type StoreRequest = { sessionId?: string; task: Task; expectedVersion?: number; taskId?: string; version?: number };
 
 export type ControllerStub = { calls: ControllerCall[]; refusedSettles: () => number; close: () => Promise<void> };
 export type ModelStub = { requests: ModelRequest[]; close: () => Promise<void> };
@@ -32,7 +34,7 @@ export async function startControllerStub(host: string, port: number, sessionId:
       responseSerialize: (v: unknown) => m.response.encode(v as never),
       responseDeserialize: (b: Buffer) => m.response.decode(b),
     } as grpc.MethodDefinition<unknown, unknown>;
-    handlers[name] = (call: grpc.ServerUnaryCall<Record<string, any>, unknown>, cb: grpc.sendUnaryData<unknown>) => {
+    handlers[name] = (call: grpc.ServerUnaryCall<StoreRequest, unknown>, cb: grpc.sendUnaryData<unknown>) => {
       const authorization = call.metadata.get("authorization")[0]?.toString();
       const req = call.request;
       calls.push({ method: name, authorization, sessionId: req.sessionId });
@@ -59,7 +61,7 @@ export async function startControllerStub(host: string, port: number, sessionId:
           return cb(null, { version: stored.version });
         }
         case "getTask": {
-          const stored = tasks.get(req.taskId);
+          const stored = tasks.get(req.taskId ?? "");
           if (!stored) return cb({ code: grpc.status.NOT_FOUND, details: "task does not exist" });
           return cb(null, stored);
         }
