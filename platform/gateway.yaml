@@ -77,3 +77,99 @@ spec:
       mode: Strict
       configMapSelector:
         matchLabels: {agents.build-coding-agent.dev/api-keys: "true"}
+---
+# The catalog MCP servers, each behind its own route: /mcp/github (platform/github-mcp.yaml)
+# and /mcp/demo (platform/demo-mcp.yaml). One server per backend, so tool names keep no
+# prefix. Each agent's RemoteMCPServer (platform/charts/agent/templates/mcp-servers.yaml)
+# sends the agent's own key in x-agent-key; the route checks it against agent-api-keys and
+# strips it. Which tools an agent sees and may call is the minter's policy for it,
+# mcp-tools.<team>.<agent>: a CEL rule on apiKey.team, apiKey.agent and mcp.tool.name. A tool
+# no rule allows is missing from tools/list and answers "Unknown tool".
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata: {name: github-mcp, namespace: agentgateway-system}
+spec:
+  mcp:
+    targets:
+    - name: github-mcp
+      static: {host: github-mcp.github-mcp.svc.cluster.local, port: 8080, path: /, protocol: StreamableHTTP}
+  # The GitHub token lives here only: Secret github-mcp-token (make deploy, from GITHUB_TOKEN
+  # in .env), sent to github-mcp-server as "Authorization: Bearer <token>".
+  policies:
+    auth:
+      secretRef: {name: github-mcp-token}
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata: {name: demo-mcp, namespace: agentgateway-system}
+spec:
+  mcp:
+    targets:
+    - name: demo-mcp
+      static: {host: demo-mcp.demo-mcp.svc.cluster.local, port: 8080, path: /mcp, protocol: StreamableHTTP}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: github-mcp, namespace: agentgateway-system}
+spec:
+  parentRefs:
+  - {name: agentgateway-proxy, sectionName: http}
+  rules:
+  - matches:
+    - path: {type: PathPrefix, value: /mcp/github}
+    filters:
+    - type: RequestHeaderModifier
+      requestHeaderModifier:
+        remove: [x-agent-key]
+    backendRefs:
+    - {group: agentgateway.dev, kind: AgentgatewayBackend, name: github-mcp}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: demo-mcp, namespace: agentgateway-system}
+spec:
+  parentRefs:
+  - {name: agentgateway-proxy, sectionName: http}
+  rules:
+  - matches:
+    - path: {type: PathPrefix, value: /mcp/demo}
+    filters:
+    - type: RequestHeaderModifier
+      requestHeaderModifier:
+        remove: [x-agent-key]
+    backendRefs:
+    - {group: agentgateway.dev, kind: AgentgatewayBackend, name: demo-mcp}
+---
+# The MCP routes want an agent key, in x-agent-key: Authorization on this origin is the model
+# key's binding already, and Substrate refuses a second credential in the same header.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata: {name: mcp-agent-keys, namespace: agentgateway-system}
+spec:
+  targetRefs:
+  - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: github-mcp}
+  - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: demo-mcp}
+  traffic:
+    apiKeyAuthentication:
+      mode: Strict
+      location:
+        header: {name: x-agent-key}
+      configMapSelector:
+        matchLabels: {agents.build-coding-agent.dev/api-keys: "true"}
+---
+# The floor: agentgateway merges the Allow rules of every policy on a backend, and with one
+# Allow rule configured a tool no rule allows is hidden. This rule allows nothing, so a backend
+# with no agent policy yet hides every tool rather than showing them all.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata: {name: mcp-deny-floor, namespace: agentgateway-system}
+spec:
+  targetRefs:
+  - {group: agentgateway.dev, kind: AgentgatewayBackend, name: github-mcp}
+  - {group: agentgateway.dev, kind: AgentgatewayBackend, name: demo-mcp}
+  backend:
+    mcp:
+      authorization:
+        action: Allow
+        policy:
+          matchExpressions: ["false"]

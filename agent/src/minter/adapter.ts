@@ -1,9 +1,11 @@
-// The minter's thin Kubernetes side: read the registrations, the key Secrets (metadata only)
-// and agentgateway's API-key ConfigMap; hand them to plan(); apply what it returns.
-import type { KubeClient } from "./kube.ts";
-import { type Change, type Current, type HashEntry, type KeySecret, plan, randomKey, type Registration, teamNamespace } from "./plan.ts";
+// The minter's thin Kubernetes side: read the registrations, the key Secrets (metadata only),
+// agentgateway's API-key ConfigMap and the minter's MCP tool policies; hand them to plan();
+// apply what it returns.
+import type { KubeClient, McpPolicy, TargetRef } from "./kube.ts";
+import { type Change, type Current, type HashEntry, type KeySecret, plan, randomKey, type Registration, teamNamespace, type ToolPolicy } from "./plan.ts";
 
-export type MinterConfig = { teams: readonly string[]; apiKeys: { namespace: string; name: string } };
+/** apiKeys: agentgateway's API-key ConfigMap. mcp: where the agents' tool policies go, and the catalog MCP backends they cover. */
+export type MinterConfig = { teams: readonly string[]; apiKeys: { namespace: string; name: string }; mcp: { namespace: string; backends: readonly string[] } };
 export type State = { registrations: Registration[]; current: Current; skipped: string[] };
 
 export const REGISTRATION_SELECTOR = "agents.build-coding-agent.dev/registration=true";
@@ -12,6 +14,27 @@ const AGENT_LABEL = "agents.build-coding-agent.dev/agent";
 const MANAGED_BY_LABEL = "app.kubernetes.io/managed-by";
 const KEY_HASH_ANNOTATION = "agents.build-coding-agent.dev/key-hash";
 const KEY_SELECTOR = `${MANAGED_BY_LABEL}=minter,${KEY_LABEL}=true`;
+const TEAM_LABEL = "agents.build-coding-agent.dev/team";
+const MCP_TOOLS_LABEL = "agents.build-coding-agent.dev/mcp-tools";
+const POLICY_SELECTOR = `${MANAGED_BY_LABEL}=minter,${MCP_TOOLS_LABEL}=true`;
+
+const backendRefs = (config: MinterConfig): TargetRef[] => config.mcp.backends.map((name) => ({ group: "agentgateway.dev", kind: "AgentgatewayBackend", name }));
+
+/** The registration's MCP tool names (data mcpTools, a JSON list); anything else reads as none, which hides every tool. */
+function parseTools(raw: string | undefined): string[] {
+  try {
+    const parsed: unknown = JSON.parse(raw ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A policy keeps its rule only when it targets exactly the catalog backends with one rule; otherwise plan rewrites it. */
+function toToolPolicy(p: McpPolicy, config: MinterConfig): ToolPolicy {
+  const isOurShape = JSON.stringify(p.targetRefs) === JSON.stringify(backendRefs(config)) && p.matchExpressions.length === 1;
+  return { name: p.name, team: p.labels[TEAM_LABEL] ?? "", agent: p.labels[AGENT_LABEL] ?? "", rule: isOurShape ? p.matchExpressions[0]! : "" };
+}
 /** The Secret key the agent's ModelConfig reads (apiKeySecretKey). */
 export const SECRET_KEY = "OPENAI_API_KEY";
 
@@ -45,7 +68,7 @@ export async function readState(kube: KubeClient, config: MinterConfig): Promise
         skipped.push(`${namespace}/${cm.name}: claims team ${JSON.stringify(cm.data.team ?? "")}, but lives in ${namespace}`);
         continue;
       }
-      registrations.push({ team, agent });
+      registrations.push({ team, agent, tools: parseTools(cm.data.mcpTools) });
     }
     for (const meta of await kube.listSecretMetadata(namespace, KEY_SELECTOR)) {
       secrets.push({ namespace, name: meta.name, team, agent: meta.labels[AGENT_LABEL] ?? "", keyHash: meta.annotations[KEY_HASH_ANNOTATION] ?? "" });
@@ -53,10 +76,11 @@ export async function readState(kube: KubeClient, config: MinterConfig): Promise
   }
   const apiKeys = await kube.getConfigMap(config.apiKeys.namespace, config.apiKeys.name);
   const hashes = Object.entries(apiKeys.data).map(([entry, value]) => parseEntry(entry, value));
-  return { registrations, current: { secrets, hashes }, skipped };
+  const policies = (await kube.listMcpPolicies(config.mcp.namespace, POLICY_SELECTOR)).map((p) => toToolPolicy(p, config));
+  return { registrations, current: { secrets, hashes, policies }, skipped };
 }
 
-/** New Secrets first, then every hash entry in one patch, then the Secrets that go. */
+/** New Secrets and tool policies first, then every hash entry in one patch, then the policies and Secrets that go. */
 export async function applyChanges(kube: KubeClient, config: MinterConfig, changes: readonly Change[]): Promise<void> {
   const patch: Record<string, string | null> = {};
   for (const c of changes) {
@@ -68,11 +92,20 @@ export async function applyChanges(kube: KubeClient, config: MinterConfig, chang
         stringData: { [SECRET_KEY]: c.key },
       });
     }
+    if (c.kind === "put-policy") {
+      await kube.putMcpPolicy(config.mcp.namespace, {
+        name: c.name,
+        labels: { [MANAGED_BY_LABEL]: "minter", [MCP_TOOLS_LABEL]: "true", [TEAM_LABEL]: c.team, [AGENT_LABEL]: c.agent },
+        targetRefs: backendRefs(config),
+        matchExpressions: [c.rule],
+      });
+    }
     if (c.kind === "set-hash") patch[c.entry] = entryValue(c);
     if (c.kind === "delete-hash") patch[c.entry] = null;
   }
   if (Object.keys(patch).length > 0) await kube.patchConfigMapData(config.apiKeys.namespace, config.apiKeys.name, patch);
   for (const c of changes) {
+    if (c.kind === "delete-policy") await kube.deleteMcpPolicy(config.mcp.namespace, c.name);
     if (c.kind === "delete-secret") await kube.deleteSecret(c.namespace, c.name);
   }
 }

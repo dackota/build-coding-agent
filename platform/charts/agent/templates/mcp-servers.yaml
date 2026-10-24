@@ -1,0 +1,28 @@
+{{- include "agent.check" . -}}
+{{- /*
+The agent's own RemoteMCPServer for each catalog server its tools use, at agentgateway's
+route for that server. The header is the agent's own key, from the Secret the minter writes
+(the same Secret and key as its ModelConfig, in x-agent-key: one origin cannot carry two
+credentials in Authorization). Substrate's egress gateway adds it as the request leaves the
+actor; agentgateway checks it, strips it, and allows only the tools of the minter's policy for
+this agent. A team base cannot hold these: the header Secret is per agent.
+*/ -}}
+{{- $servers := include "agent.mcpServers" . | fromYaml }}
+{{- range $server := include "agent.usedServers" . | fromJsonArray }}
+{{- $s := get $servers $server }}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: {{ include "agent.mcpServerName" (dict "agent" $.Values.name "server" $server) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "agent.labels" $ | nindent 4 }}
+spec:
+  description: {{ $s.description | quote }}
+  protocol: STREAMABLE_HTTP
+  url: http://agentgateway-proxy.agentgateway-system.svc.cluster.local{{ $s.path }}
+  headersFrom:
+    - name: x-agent-key
+      valueFrom: {type: Secret, name: {{ include "agent.keySecret" $ }}, key: OPENAI_API_KEY}
+{{- end }}

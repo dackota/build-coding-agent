@@ -56,7 +56,7 @@ describe("catalog MCP servers behind agentgateway", () => {
   });
 
   it("the minter writes its policies for exactly these backends", () => {
-    const r = render(TEAMS_CHART, "teams", "argocd", [valuesFile({ teams: ["platform"], workerImage: "w", minter: { image: `node@sha256:${"a".repeat(64)}`, source: { main: "//" } } })]);
+    const r = render(TEAMS_CHART, "teams", "argocd", [valuesFile({ teams: ["platform"], workerImage: `worker@sha256:${"b".repeat(64)}`, minter: { image: `node@sha256:${"a".repeat(64)}`, source: { main: "//" } } })]);
     expect(r.ok, r.output).toBe(true);
     const env = find(r.objects, "CronJob", "minter", "platform-system")!.spec.jobTemplate.spec.template.spec.containers[0].env as { name: string; value: string }[];
     expect(env.find((e) => e.name === "MINTER_MCP_BACKENDS")?.value.split(",")).toEqual(SERVERS.map((s) => s.backend));

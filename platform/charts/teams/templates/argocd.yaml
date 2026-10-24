@@ -26,6 +26,7 @@ spec:
     - {group: api.kagent.dev, kind: Agent}
     - {group: api.kagent.dev, kind: ModelConfig}
     - {group: api.kagent.dev, kind: Harness}
+    - {group: api.kagent.dev, kind: RemoteMCPServer}
     - {group: "", kind: ConfigMap}
 {{- end }}
 ---

@@ -1,13 +1,12 @@
 # The GitHub MCP server for git out: the agent creates a branch, pushes files, and opens a
 # pull request through it. github-mcp-server (http mode, only the four tools below) wants a
 # GitHub token on every request and refuses one without it. This namespace holds no token.
-# Each team base has a RemoteMCPServer github-mcp for it (platform/charts/teams/templates/coding.yaml)
-# whose Authorization header comes from Secret github-mcp-token in the team's namespace (made
-# by deploy.sh from GITHUB_TOKEN in .env, value "Bearer <token>"). kagent puts only
-# __KAGENT_ENV[KAGENT_CREDENTIAL_<hash>]__ in the agent's config and the placeholder
-# kagent-credential-injected in the actor's env; Substrate's egress gateway swaps the
-# placeholder for the Secret as the request leaves the actor. So the token is never in the
-# actor, its config, or this pod's spec, and a pod with no token gets refused.
+# Agents reach it only through agentgateway's route /mcp/github (platform/gateway.yaml), whose
+# backend adds the token from Secret agentgateway-system/github-mcp-token (made by deploy.sh
+# from GITHUB_TOKEN in .env). So the token is never in a team namespace, an actor, its config,
+# or this pod's spec, and a request that skips the gateway gets refused. Each agent's own
+# RemoteMCPServer (platform/charts/agent/templates/mcp-servers.yaml) sends its own key, and the
+# minter's policy for it lets it see and call only the tools of its catalog tools.
 # The catalog tool github-write binds create_branch, push_files and create_pull_request with
 # requireApproval, so each call the model makes pauses for the user; github-read binds
 # issue_read. The implement loop (agent/src/loop-github.ts) calls issue_read, and its three
