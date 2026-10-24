@@ -1,0 +1,81 @@
+# The token caps' backend: Envoy's ratelimit service and the Redis it counts in, next to the
+# gateway. The model route (platform/gateway.yaml) asks the service on every call, once for the
+# agent's descriptor and once for its team's, with unit Tokens. The config is a ConfigMap the
+# platform's minter owns (agent/src/minter/): one entry per agent from its values file's tokenCap,
+# one per team from platform/budgets.txt. This file leaves it without data, so applying it again
+# keeps the minter's entries. The images come from platform/versions.env (install.sh fills the @..@ names). Counters live in Redis memory only; a restart starts the month over.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: ratelimit-config, namespace: agentgateway-system}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: redis, namespace: agentgateway-system}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: redis}}
+  template:
+    metadata: {labels: {app: redis}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 999, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: redis
+        image: "@REDIS_IMAGE@"
+        args: ["--save", "", "--appendonly", "no"]
+        ports: [{containerPort: 6379}]
+        readinessProbe: {tcpSocket: {port: 6379}}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        resources:
+          requests: {cpu: 10m, memory: 32Mi}
+          limits: {memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: redis, namespace: agentgateway-system}
+spec:
+  selector: {app: redis}
+  ports: [{name: redis, port: 6379}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: ratelimit, namespace: agentgateway-system}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: ratelimit}}
+  template:
+    metadata: {labels: {app: ratelimit}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: ratelimit
+        image: "@RATELIMIT_IMAGE@"
+        command: ["/bin/ratelimit"]
+        env:
+        - {name: LOG_LEVEL, value: info}
+        - {name: USE_STATSD, value: "false"}
+        - {name: REDIS_SOCKET_TYPE, value: tcp}
+        - {name: REDIS_URL, value: "redis.agentgateway-system.svc.cluster.local:6379"}
+        - {name: RUNTIME_ROOT, value: /data}
+        - {name: RUNTIME_SUBDIRECTORY, value: ratelimit}
+        # The config is a ConfigMap mount: kubelet swaps its symlinks, so watch the config directory itself.
+        - {name: RUNTIME_WATCH_ROOT, value: "false"}
+        - {name: RUNTIME_IGNOREDOTFILES, value: "true"}
+        ports:
+        - {name: grpc, containerPort: 8081}
+        readinessProbe: {tcpSocket: {port: 8081}}
+        volumeMounts:
+        - {name: config, mountPath: /data/ratelimit/config, readOnly: true}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        resources:
+          requests: {cpu: 10m, memory: 32Mi}
+          limits: {memory: 128Mi}
+      volumes:
+      - name: config
+        configMap: {name: ratelimit-config}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: ratelimit, namespace: agentgateway-system}
+spec:
+  selector: {app: ratelimit}
+  ports: [{name: grpc, port: 8081, appProtocol: kubernetes.io/h2c}]

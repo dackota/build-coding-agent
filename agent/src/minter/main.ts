@@ -2,6 +2,7 @@
 // gives every registered agent of a listed team its own model key and removes the keys of
 // agents that are gone. It logs one JSON line per change, never a key, and exits non-zero on
 // any failure; the next run (a minute later) converges from wherever this one stopped.
+import { readFileSync } from "node:fs";
 import { runOnce, type MinterConfig } from "./adapter.ts";
 import { inClusterKube } from "./kube.ts";
 import { TEAM_PATTERN, type Change } from "./plan.ts";
@@ -16,6 +17,17 @@ function describe(c: Change): Record<string, unknown> {
   return { ...c };
 }
 
+/** The token caps are on when the budgets file is named: MINTER_BUDGETS_FILE (JSON, team to monthly tokens) and the ratelimit config's ConfigMap. */
+function capsFromEnv(env: NodeJS.ProcessEnv): Pick<MinterConfig, "budgets" | "rateLimit"> {
+  const file = env.MINTER_BUDGETS_FILE ?? "";
+  if (file === "") return {};
+  const namespace = env.MINTER_RATELIMIT_NAMESPACE ?? "";
+  const name = env.MINTER_RATELIMIT_CONFIGMAP ?? "";
+  if (namespace === "" || name === "") throw new Error("MINTER_BUDGETS_FILE is set, so MINTER_RATELIMIT_NAMESPACE and MINTER_RATELIMIT_CONFIGMAP must name the ratelimit config ConfigMap");
+  const budgets = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+  return { budgets: Object.fromEntries(Object.entries(budgets).filter(([, tokens]) => typeof tokens === "number")) as Record<string, number>, rateLimit: { namespace, name } };
+}
+
 function configFromEnv(env: NodeJS.ProcessEnv): MinterConfig {
   const teams = (env.MINTER_TEAMS ?? "").split(",").filter((t) => t !== "");
   if (teams.length === 0) throw new Error("MINTER_TEAMS is empty: set it to the team list, comma-separated");
@@ -24,14 +36,14 @@ function configFromEnv(env: NodeJS.ProcessEnv): MinterConfig {
   const namespace = env.MINTER_API_KEYS_NAMESPACE ?? "";
   const name = env.MINTER_API_KEYS_CONFIGMAP ?? "";
   if (namespace === "" || name === "") throw new Error("MINTER_API_KEYS_NAMESPACE and MINTER_API_KEYS_CONFIGMAP must name agentgateway's API-key ConfigMap");
-  return { teams, apiKeys: { namespace, name } };
+  return { teams, apiKeys: { namespace, name }, ...capsFromEnv(env) };
 }
 
 try {
   const config = configFromEnv(process.env);
   const changes = await runOnce(inClusterKube(), config, undefined, (why) => log("registration-skipped", { why }));
   for (const c of changes) log("applied", describe(c));
-  log("run-done", { teams: config.teams, changes: changes.length });
+  log("run-done", { teams: config.teams, budgeted: Object.keys(config.budgets ?? {}), changes: changes.length });
 } catch (err) {
   log("run-failed", { error: (err as Error).message });
   process.exitCode = 1;

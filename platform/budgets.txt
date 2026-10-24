@@ -1,0 +1,5 @@
+# Each team's monthly token budget, one "<team> <tokens>" line per team (platform-owned: no
+# team can change it). The agents of a team share it, and each agent's own cap (tokenCap in
+# its values file) must fit inside. A team with no line gets no keys. The window is the
+# ratelimit service's month: 30 days.
+platform 50000000

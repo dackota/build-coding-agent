@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Report each platform part on the kind cluster: one ok or FAIL line for Substrate,
 # kagent, agentgateway, Argo CD and its ApplicationSet, each team's base (platform/teams.txt),
-# the platform team's agents (in team-platform, from deployments/platform/), and the image pins. Exits non-zero when any
+# the platform team's agents (in team-platform, from deployments/platform/), the image pins, and
+# each agent's and team's token use against its cap (caps.sh). Exits non-zero when any
 # line is FAIL. Reads Secret names only, never their data.
 set -euo pipefail
 # shellcheck source=platform/lib.sh
@@ -148,4 +149,6 @@ check_agent triage-agent
 check_agent docs-agent
 check_agent hello-agent
 check_images
+# shellcheck disable=SC2310  # wrapper: caps.sh prints its own FAIL line
+"$PLATFORM_DIR/caps.sh" || failed=1
 exit "$failed"

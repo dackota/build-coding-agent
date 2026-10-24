@@ -110,6 +110,82 @@ describe("minter adapter", () => {
     kube.seedConfigMap("kube-system", "evil-registration", REGISTRATION, { team: "platform", agent: "evil" });
 
     const state = await readState(kube, CONFIG);
-    expect(state.registrations).toEqual([{ team: "platform", agent: "hello-agent" }]);
+    expect(state.registrations).toEqual([{ team: "platform", agent: "hello-agent", tokenCap: 1000 }]);
+  });
+});
+
+describe("minter adapter: token caps", () => {
+  const RATE_LIMIT = { namespace: "agentgateway-system", name: "ratelimit-config" };
+  const CAP_CONFIG: MinterConfig = { ...CONFIG, budgets: { platform: 5000 }, rateLimit: RATE_LIMIT };
+  const capCluster = (): FakeKube => {
+    const kube = cluster();
+    kube.seedConfigMap(RATE_LIMIT.namespace, RATE_LIMIT.name, {}, {});
+    return kube;
+  };
+  /** The ratelimit config as the service reads it: domain agw, one descriptor per agent and team. */
+  const descriptors = (kube: FakeKube) => (JSON.parse(kube.configMap(RATE_LIMIT.namespace, RATE_LIMIT.name)!.data["config.yaml"] ?? "{}") as { domain?: string; descriptors?: unknown[] });
+
+  it("writes the agent and team caps into the ratelimit config and drops a deleted agent's", async () => {
+    const kube = capCluster();
+    register(kube, "platform", "hello-agent");
+    register(kube, "platform", "docs-agent");
+    await runOnce(kube, CAP_CONFIG, keyMaker());
+
+    const month = (n: number) => ({ unit: "month", requests_per_unit: n });
+    expect(descriptors(kube)).toEqual({
+      domain: "agw",
+      descriptors: [
+        { key: "agent", value: "platform.docs-agent", rate_limit: month(1000) },
+        { key: "agent", value: "platform.hello-agent", rate_limit: month(1000) },
+        { key: "team", value: "platform", rate_limit: month(5000) },
+      ],
+    });
+
+    kube.configMaps.delete("team-platform/docs-agent-registration");
+    await runOnce(kube, CAP_CONFIG, keyMaker());
+    expect(descriptors(kube).descriptors).toEqual([
+      { key: "agent", value: "platform.hello-agent", rate_limit: month(1000) },
+      { key: "team", value: "platform", rate_limit: month(5000) },
+    ]);
+  });
+
+  it("says why a registration of a team with no budget gets nothing", async () => {
+    const kube = capCluster();
+    register(kube, "payments", "pay-bot");
+    const said: string[] = [];
+
+    const changes = await runOnce(kube, CAP_CONFIG, keyMaker(), (why) => said.push(why));
+
+    expect(changes.filter((c) => c.kind !== "set-limit")).toEqual([]);
+    expect(kube.secret("team-payments", "pay-bot-agent-key")).toBeUndefined();
+    expect(said).toEqual([expect.stringMatching(/team-payments\/pay-bot-registration.*payments.*no budget/)]);
+    expect(descriptors(kube).descriptors).toEqual([{ key: "team", value: "platform", rate_limit: { unit: "month", requests_per_unit: 5000 } }]);
+  });
+
+  it("says why a registration with no usable tokenCap gets nothing", async () => {
+    const kube = capCluster();
+    kube.seedConfigMap("team-platform", "odd-registration", REGISTRATION, { team: "platform", agent: "odd", tokenCap: "lots" });
+    const said: string[] = [];
+    await runOnce(kube, CAP_CONFIG, keyMaker(), (why) => said.push(why));
+    expect(kube.secret("team-platform", "odd-agent-key")).toBeUndefined();
+    expect(said).toEqual([expect.stringMatching(/team-platform\/odd-registration.*tokenCap/)]);
+  });
+
+  it("fails the run, writing nothing, when the ratelimit config is not JSON", async () => {
+    const kube = capCluster();
+    kube.seedConfigMap(RATE_LIMIT.namespace, RATE_LIMIT.name, {}, { "config.yaml": "domain: [oops" });
+    register(kube, "platform", "hello-agent");
+    await expect(runOnce(kube, CAP_CONFIG, keyMaker())).rejects.toThrow();
+    expect(kube.writes).toEqual([]);
+    expect(kube.configMap(RATE_LIMIT.namespace, RATE_LIMIT.name)!.data["config.yaml"]).toBe("domain: [oops");
+  });
+
+  it("a second run changes nothing", async () => {
+    const kube = capCluster();
+    register(kube, "platform", "hello-agent");
+    await runOnce(kube, CAP_CONFIG, keyMaker());
+    kube.writes.length = 0;
+    expect(await runOnce(kube, CAP_CONFIG, keyMaker())).toEqual([]);
+    expect(kube.writes).toEqual([]);
   });
 });

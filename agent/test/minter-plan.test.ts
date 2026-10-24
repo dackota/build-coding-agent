@@ -169,3 +169,112 @@ describe("minter plan: examples", () => {
     expect(changes.filter((c) => c.kind === "set-hash")).toHaveLength(2000);
   });
 });
+
+// Token caps: with budgets given, plan() also keeps the agent and team entries of the ratelimit config.
+const BUDGETS = { platform: 50_000_000, payments: 10_000_000 };
+const BUDGETED_TEAMS = Object.keys(BUDGETS);
+const CAPS = [1, 1000, 1_000_000, 50_000_000];
+const capArb = fc.constantFrom(...CAPS);
+const capRegistrationArb = fc.record({ team: fc.oneof(fc.constantFrom(...KNOWN_TEAMS), fc.constantFrom(...UNKNOWN_TEAMS)), agent: fc.constantFrom(...GOOD_AGENTS), tokenCap: capArb });
+const capRegistrationsArb = fc.array(capRegistrationArb, { maxLength: 200 });
+const EMPTY: Current = { secrets: [], hashes: [], limits: [] };
+
+/** The cluster after the changes, limits included. */
+function applyAll(current: Current, changes: readonly Change[]): Current {
+  const base = applyModel(current, changes);
+  const limits = new Map((current.limits ?? []).map((l) => [`${l.scope}/${l.team}/${l.agent}`, l]));
+  for (const c of changes) {
+    if (c.kind === "set-limit") limits.set(`${c.scope}/${c.team}/${c.agent}`, { scope: c.scope, team: c.team, agent: c.agent, tokens: c.tokens });
+    if (c.kind === "delete-limit") limits.delete(`${c.scope}/${c.team}/${c.agent}`);
+  }
+  return { ...base, limits: [...limits.values()] };
+}
+
+/** An earlier run's leftovers: caps for agents and teams that may be gone, or for the wrong amount. */
+const staleLimitsArb = fc.array(
+  fc.record({
+    scope: fc.constantFrom("agent" as const, "team" as const),
+    team: fc.constantFrom(...KNOWN_TEAMS, "ghost"),
+    agent: fc.constantFrom(...GOOD_AGENTS),
+    tokens: fc.constantFrom(7, 99),
+  }),
+  { maxLength: 20 },
+);
+
+describe("minter plan: token caps", () => {
+  const hasBudget = (r: Registration) => BUDGETED_TEAMS.includes(r.team) && GOOD_AGENTS.includes(r.agent);
+
+  it("every registration of a budgeted team has exactly one agent cap, with its own amount", () => {
+    fc.assert(
+      fc.property(capRegistrationsArb, staleLimitsArb, (registrations, stale) => {
+        const current: Current = { ...EMPTY, limits: stale.map((l) => (l.scope === "team" ? { ...l, agent: "" } : l)) };
+        const after = applyAll(current, plan(registrations, KNOWN_TEAMS, current, keyMaker(), BUDGETS));
+        for (const r of registrations.filter(hasBudget)) {
+          const caps = (after.limits ?? []).filter((l) => l.scope === "agent" && l.team === r.team && l.agent === r.agent);
+          expect(caps, id(r.team, r.agent)).toHaveLength(1);
+          const last = [...registrations].reverse().find((x) => x.team === r.team && x.agent === r.agent)!;
+          expect(caps[0]!.tokens).toBe((last as Registration & { tokenCap: number }).tokenCap);
+        }
+      }),
+    );
+  });
+
+  it("a team with no budget gets no key and no cap, and no agent of it keeps one", () => {
+    fc.assert(
+      fc.property(capRegistrationsArb, staleLimitsArb, (registrations, stale) => {
+        const current: Current = { ...EMPTY, limits: stale.map((l) => (l.scope === "team" ? { ...l, agent: "" } : l)) };
+        const after = applyAll(current, plan(registrations, KNOWN_TEAMS, current, keyMaker(), { platform: BUDGETS.platform }));
+        for (const l of after.limits ?? []) expect(l.team, `${l.scope} cap of ${l.team}`).toBe("platform");
+        for (const s of after.secrets) expect(s.team).toBe("platform");
+        for (const h of after.hashes) expect(h.team).toBe("platform");
+      }),
+    );
+  });
+
+  it("holds one team cap per budgeted listed team, from the budgets file, and nothing else", () => {
+    fc.assert(
+      fc.property(capRegistrationsArb, staleLimitsArb, (registrations, stale) => {
+        const current: Current = { ...EMPTY, limits: stale.map((l) => (l.scope === "team" ? { ...l, agent: "" } : l)) };
+        const after = applyAll(current, plan(registrations, KNOWN_TEAMS, current, keyMaker(), BUDGETS));
+        const teamCaps = (after.limits ?? []).filter((l) => l.scope === "team");
+        expect(teamCaps.map((l) => [l.team, l.tokens]).sort()).toEqual(Object.entries(BUDGETS).sort());
+        const wanted = new Set(registrations.filter(hasBudget).map((r) => id(r.team, r.agent)));
+        expect((after.limits ?? []).filter((l) => l.scope === "agent")).toHaveLength(wanted.size);
+      }),
+    );
+  });
+
+  it("plan on its own output gives no changes", () => {
+    fc.assert(
+      fc.property(capRegistrationsArb, staleLimitsArb, (registrations, stale) => {
+        const current: Current = { ...EMPTY, limits: stale.map((l) => (l.scope === "team" ? { ...l, agent: "" } : l)) };
+        const after = applyAll(current, plan(registrations, KNOWN_TEAMS, current, keyMaker(), BUDGETS));
+        expect(plan(registrations, KNOWN_TEAMS, after, keyMaker(), BUDGETS)).toEqual([]);
+      }),
+    );
+  });
+
+  it("a registration with no usable cap gets no key and no cap", () => {
+    for (const tokenCap of [undefined, 0, -5, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(plan([{ team: "platform", agent: "hello-agent", tokenCap }], KNOWN_TEAMS, EMPTY, keyMaker(), BUDGETS).filter((c) => c.kind !== "set-limit" || c.scope !== "team")).toEqual([]);
+    }
+  });
+
+  it("sets the caps before the key's hash and removes them after it", () => {
+    const grown = plan([{ team: "platform", agent: "hello-agent", tokenCap: 1000 }], KNOWN_TEAMS, EMPTY, keyMaker(), BUDGETS);
+    const kinds = grown.map((c) => c.kind);
+    expect(kinds.indexOf("set-limit")).toBeLessThan(kinds.indexOf("set-hash"));
+    const current: Current = {
+      secrets: [{ namespace: "team-platform", name: "gone-agent-key", team: "platform", agent: "gone", keyHash: sha("k") }],
+      hashes: [{ entry: "platform.gone", team: "platform", agent: "gone", keyHash: sha("k") }],
+      limits: [{ scope: "agent", team: "platform", agent: "gone", tokens: 5 }, { scope: "team", team: "platform", agent: "", tokens: BUDGETS.platform }, { scope: "team", team: "payments", agent: "", tokens: BUDGETS.payments }],
+    };
+    const shrunk = plan([], KNOWN_TEAMS, current, keyMaker(), BUDGETS).map((c) => c.kind);
+    expect(shrunk).toEqual(["delete-hash", "delete-limit", "delete-secret"]);
+  });
+
+  it("removes the cap of a deleted agent", () => {
+    const current: Current = { ...EMPTY, limits: [{ scope: "agent", team: "platform", agent: "gone", tokens: 5 }, { scope: "team", team: "platform", agent: "", tokens: BUDGETS.platform }, { scope: "team", team: "payments", agent: "", tokens: BUDGETS.payments }] };
+    expect(plan([], KNOWN_TEAMS, current, keyMaker(), BUDGETS)).toEqual([{ kind: "delete-limit", scope: "agent", team: "platform", agent: "gone" }]);
+  });
+});

@@ -76,6 +76,13 @@ install.
 | `cr.agentgateway.dev/controller` | v1.6.0 | `sha256:d84259a7e2d87f8f39bae385d4b032d823c0a4450aecb32e0e31e2258449645b` | cr.agentgateway.dev |
 | Substrate control images, kagent-tools, and the rest | see `platform/images.lock` | read from the running pods' `imageID` | the live cluster |
 
+## Token caps
+
+| Part | Version | Digest | Source |
+|---|---|---|---|
+| `docker.io/envoyproxy/ratelimit`, the image of `platform/ratelimit.yaml` (`RATELIMIT_IMAGE` in `versions.env`; in `images.lock`) | `master` tag, as of 2026-10-24 | `sha256:3d8af7853a9fad2723b2c07f29dd92d416bdfeed50183cf625b210f5115c7e28` (index digest) | https://hub.docker.com/r/envoyproxy/ratelimit, read with `docker buildx imagetools inspect envoyproxy/ratelimit:master`; the project publishes no release tags |
+| `docker.io/library/redis`, its counter store (`REDIS_IMAGE` in `versions.env`, same digest as Argo CD's Redis; in `images.lock`) | 8.6.4-alpine | `sha256:2cc044fc5a07c9b701f8f1255a309ae9ad7856e694ac03513bf3648c01e40763` (index digest) | `ARGOCD_REDIS_IMAGE_TAG` in `versions.env` |
+
 ## The agent image
 
 | Part | Version | Digest | Source |

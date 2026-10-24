@@ -13,6 +13,7 @@ const VALUES = {
   workerImage: WORKER,
   gitops: { repoURL: "https://github.com/dackota/build-coding-agent.git", revision: "main" },
   minter: { image: NODE, source: { main: "// main", plan: "// plan" } },
+  budgets: { platform: 50000000, payments: 10000000 },
 };
 const MINTER_NS = "platform-system";
 
@@ -45,7 +46,10 @@ describe("minter deployment", () => {
       expect(binding.subjects).toEqual([{ kind: "ServiceAccount", name: "minter", namespace: MINTER_NS }]);
     }
 
-    expect(rulesIn(r.objects, "agentgateway-system")).toEqual([{ apiGroups: [""], resources: ["configmaps"], resourceNames: ["agent-api-keys"], verbs: ["get", "patch"] }]);
+    expect(rulesIn(r.objects, "agentgateway-system")).toEqual([
+      { apiGroups: [""], resources: ["configmaps"], resourceNames: ["agent-api-keys"], verbs: ["get", "patch"] },
+      { apiGroups: [""], resources: ["configmaps"], resourceNames: ["ratelimit-config"], verbs: ["get", "patch"] },
+    ]);
     for (const rule of r.objects.filter((o) => o.kind === "Role").flatMap((o) => o.rules)) {
       expect(rule.verbs).not.toContain("*");
       expect(rule.resources).not.toContain("*");
@@ -75,11 +79,31 @@ describe("minter deployment", () => {
         { name: "MINTER_TEAMS", value: "platform,payments" },
         { name: "MINTER_API_KEYS_NAMESPACE", value: "agentgateway-system" },
         { name: "MINTER_API_KEYS_CONFIGMAP", value: "agent-api-keys" },
+        { name: "MINTER_RATELIMIT_NAMESPACE", value: "agentgateway-system" },
+        { name: "MINTER_RATELIMIT_CONFIGMAP", value: "ratelimit-config" },
+        { name: "MINTER_BUDGETS_FILE", value: "/budgets/budgets.json" },
       ]),
     );
     expect(container.securityContext).toMatchObject({ runAsNonRoot: true, readOnlyRootFilesystem: true, allowPrivilegeEscalation: false });
-    expect(pod.volumes).toEqual([{ name: "src", configMap: { name: "minter-src" } }]);
-    expect(container.volumeMounts).toEqual([{ name: "src", mountPath: "/minter", readOnly: true }]);
+    expect(pod.volumes).toEqual([
+      { name: "src", configMap: { name: "minter-src" } },
+      { name: "budgets", configMap: { name: "team-budgets" } },
+    ]);
+    expect(container.volumeMounts).toEqual([
+      { name: "src", mountPath: "/minter", readOnly: true },
+      { name: "budgets", mountPath: "/budgets", readOnly: true },
+    ]);
+  });
+
+  it("hands the minter the platform's team budgets as JSON, from a ConfigMap only the platform sets", () => {
+    const r = renderTeams();
+    expect(r.ok, r.output).toBe(true);
+    const budgets = find(r.objects, "ConfigMap", "team-budgets", MINTER_NS)!;
+    expect(JSON.parse(budgets.data["budgets.json"])).toEqual({ platform: 50000000, payments: 10000000 });
+  });
+
+  it("refuses a budget that is not a whole number of tokens", () => {
+    for (const bad of [0, -1, 1.5, "lots"]) expect(renderTeams({ ...VALUES, budgets: { platform: bad } }).ok, String(bad)).toBe(false);
   });
 
   it("refuses a minter image that is not pinned by digest", () => {

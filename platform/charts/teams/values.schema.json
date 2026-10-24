@@ -10,6 +10,12 @@
       "uniqueItems": true,
       "items": { "type": "string", "pattern": "^[a-z]([a-z0-9-]{0,18}[a-z0-9])?$" }
     },
+    "budgets": {
+      "description": "Set by make up from platform/budgets.txt: each team's monthly token budget",
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z]([a-z0-9-]{0,18}[a-z0-9])?$" },
+      "additionalProperties": { "type": "integer", "minimum": 1 }
+    },
     "workerImage": { "type": "string", "pattern": "@sha256:[a-f0-9]{64}$" },
     "images": {
       "description": "Set by make deploy: the coding image and each skill's image, by digest",

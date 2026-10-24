@@ -4,11 +4,13 @@ minute and gives each registered agent of a listed team its own model key. Its s
 in as values (install.sh --set-file minter.source.<file>=agent/src/minter/<file>.ts) and runs
 on the pinned node image with no dependencies. Its RBAC covers only what it writes: in each
 team namespace, the registration ConfigMaps (list) and Secrets (list, create, update,
-delete); in agentgateway-system, the one API-key ConfigMap by name. Nothing cluster-wide.
+delete); in agentgateway-system, the API-key ConfigMap and the ratelimit config ConfigMap,
+each by name. Nothing cluster-wide.
 */ -}}
 {{- $ns := "platform-system" }}
 {{- $apiKeys := "agent-api-keys" }}
 {{- $agwNs := "agentgateway-system" }}
+{{- $rateLimit := "ratelimit-config" }}
 {{- if and .Values.minter.image .Values.minter.source }}
 {{- if not (regexMatch "@sha256:[a-f0-9]{64}$" .Values.minter.image) }}
 {{- fail (printf "minter.image %s must be pinned by digest" .Values.minter.image) }}
@@ -36,6 +38,14 @@ data:
   {{- range $file, $src := .Values.minter.source }}
   {{ $file }}.ts: {{ $src | quote }}
   {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: team-budgets
+  namespace: {{ $ns }}
+data:
+  budgets.json: {{ toJson .Values.budgets | quote }}
 {{- range $team := .Values.teams }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -76,6 +86,10 @@ rules:
     resources: [configmaps]
     resourceNames: [{{ $apiKeys }}]
     verbs: [get, patch]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [{{ $rateLimit }}]
+    verbs: [get, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -110,6 +124,7 @@ spec:
           annotations:
             # A new source rolls the next run's pod; the source is what runs.
             checksum/source: {{ toJson .Values.minter.source | sha256sum }}
+            checksum/budgets: {{ toJson .Values.budgets | sha256sum }}
         spec:
           serviceAccountName: minter
           restartPolicy: Never
@@ -125,6 +140,9 @@ spec:
                 - {name: MINTER_TEAMS, value: {{ join "," .Values.teams | quote }}}
                 - {name: MINTER_API_KEYS_NAMESPACE, value: {{ $agwNs }}}
                 - {name: MINTER_API_KEYS_CONFIGMAP, value: {{ $apiKeys }}}
+                - {name: MINTER_RATELIMIT_NAMESPACE, value: {{ $agwNs }}}
+                - {name: MINTER_RATELIMIT_CONFIGMAP, value: {{ $rateLimit }}}
+                - {name: MINTER_BUDGETS_FILE, value: /budgets/budgets.json}
               securityContext:
                 runAsNonRoot: true
                 readOnlyRootFilesystem: true
@@ -135,7 +153,10 @@ spec:
                 limits: {memory: 128Mi}
               volumeMounts:
                 - {name: src, mountPath: /minter, readOnly: true}
+                - {name: budgets, mountPath: /budgets, readOnly: true}
           volumes:
             - name: src
               configMap: {name: minter-src}
+            - name: budgets
+              configMap: {name: team-budgets}
 {{- end }}
