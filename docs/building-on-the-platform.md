@@ -84,8 +84,8 @@ keep yours short.
 
 ## Recipe 3: reuse an existing MCP server (catalog tools)
 
-**Tested:** yes, for our coding agent (`github-write` and `demo-delete-branch` on
-`hello-agent`) and for the stock runtime (`github-read` on `triage-agent`).
+**Tested:** yes, for our coding agent (`github-read`, `github-write` and `demo-delete-branch`
+on `hello-agent`) and for the stock runtime (`github-read` on `triage-agent`).
 
 A values file picks tools by catalog name. The catalog (`agent.catalog` in
 `platform/charts/agent/templates/_helpers.tpl`) maps each name to a catalog MCP server, its
@@ -111,7 +111,8 @@ The chart renders each as a template binding:
 ```
 
 - `tools` limits what the model sees. Leave out a tool and the model cannot call it, and
-  the gateway refuses it to `curl` too.
+  the gateway refuses it to `curl` too. `/implement` reads the issue with `issue_read`, so
+  an agent that runs it needs `github-read` as well as `github-write`.
 - `requireApproval: true` pauses before every call (approve, deny, or approve for the
   session). The schema refuses `requireApproval: false` on a write tool.
 
