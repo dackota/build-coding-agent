@@ -19,7 +19,7 @@ const listRequestCodec = { encode: A2AService.listTasks.requestSerialize, decode
 const listResponseCodec = { encode: A2AService.listTasks.responseSerialize, decode: A2AService.listTasks.responseDeserialize };
 
 /** Writes fields in number order and reads them back, skipping any field it does not know. */
-function message<T>(write: (w: BinaryWriter, v: T) => void, read: (r: BinaryReader, end: number, out: Record<string, any>) => boolean, init: () => Record<string, any>): Codec<T> {
+function message<T>(write: (w: BinaryWriter, v: T) => void, read: (r: BinaryReader, end: number, out: Record<string, unknown>) => boolean, init: () => Record<string, unknown>): Codec<T> {
   return {
     encode: (value) => {
       const w = new BinaryWriter();

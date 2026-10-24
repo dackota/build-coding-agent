@@ -18,7 +18,7 @@ export type Change =
   | { kind: "delete-hash"; entry: string };
 
 // The values-file schema's patterns (platform/charts/agent/values.schema.json).
-const TEAM_PATTERN = /^[a-z]([a-z0-9-]{0,18}[a-z0-9])?$/;
+export const TEAM_PATTERN = /^[a-z]([a-z0-9-]{0,18}[a-z0-9])?$/;
 const AGENT_PATTERN = /^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$/;
 const KEY_HASH_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const KEY_BYTES = 32;

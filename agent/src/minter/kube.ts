@@ -22,6 +22,7 @@ export interface KubeClient {
 
 const SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount";
 const STATUS_NOT_FOUND = 404;
+const isSuccess = (status: number): boolean => status >= 200 && status <= 299;
 const STATUS_CONFLICT = 409;
 const PARTIAL_METADATA_LIST = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1";
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -70,7 +71,7 @@ export function inClusterKube(env: NodeJS.ProcessEnv = process.env): KubeClient 
   /** Call and fail on a non-2xx status; the API's own message says which object and why (it never holds a Secret's data). */
   async function ok(method: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<Response> {
     const res = await call(method, path, body, headers);
-    if (res.status < 200 || res.status > 299) {
+    if (!isSuccess(res.status)) {
       let message = res.body.slice(0, 300);
       try {
         message = (JSON.parse(res.body) as { message?: string }).message ?? message;
@@ -107,13 +108,13 @@ export function inClusterKube(env: NodeJS.ProcessEnv = process.env): KubeClient 
         stringData: secret.stringData,
       };
       const created = await call("POST", `/api/v1/namespaces/${enc(namespace)}/secrets`, object, { "content-type": "application/json" });
-      if (created.status >= 200 && created.status <= 299) return;
+      if (isSuccess(created.status)) return;
       if (created.status !== STATUS_CONFLICT) throw new KubeError(created.status, `POST secret ${namespace}/${secret.name}: ${created.status}`);
       await ok("PUT", `/api/v1/namespaces/${enc(namespace)}/secrets/${enc(secret.name)}`, object, { "content-type": "application/json" });
     },
     async deleteSecret(namespace, name) {
       const res = await call("DELETE", `/api/v1/namespaces/${enc(namespace)}/secrets/${enc(name)}`);
-      if ((res.status < 200 || res.status > 299) && res.status !== STATUS_NOT_FOUND) throw new KubeError(res.status, `DELETE secret ${namespace}/${name}: ${res.status}`);
+      if (!isSuccess(res.status) && res.status !== STATUS_NOT_FOUND) throw new KubeError(res.status, `DELETE secret ${namespace}/${name}: ${res.status}`);
     },
     async patchConfigMapData(namespace, name, data) {
       await ok("PATCH", `/api/v1/namespaces/${enc(namespace)}/configmaps/${enc(name)}`, { data }, { "content-type": "application/merge-patch+json" });

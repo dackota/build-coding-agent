@@ -13,6 +13,13 @@ memory.
 | `src/task-store.ts`, `src/wire.ts` | 4, 5: the controller's task store, settle at boundaries |
 | `src/config.ts`, `src/model.ts` | 6: runtime config, the placeholder key |
 
+## Mirrored files
+
+The starter must build on its own, so these files are copies of files in `agent/src`:
+`early-listener.ts`, `readyz.ts`, `log.ts`, `wire.ts`, and `task-store.ts` (from
+`controller-task-store.ts`). `model.ts` is a near copy of `gateway.ts`. Change both
+sides together. `agent/test/byo-starter-mirror.test.ts` fails when a copy drifts.
+
 ## Deploy
 
 ```
