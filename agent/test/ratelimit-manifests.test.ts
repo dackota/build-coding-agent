@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseAllDocuments } from "yaml";
 import { describe, expect, it } from "vitest";
-import { find, type K8sObject, PLATFORM_DIR } from "./chart-helpers.ts";
+import { RATELIMIT_DOMAIN } from "../src/minter/adapter.ts";
+import { find, type K8sObject, PLATFORM_DIR, render, TEAMS_CHART, valuesFile } from "./chart-helpers.ts";
 
 /** versions.env's NAME=value lines. */
 const versions = Object.fromEntries(
@@ -58,7 +59,7 @@ describe("token caps on the model route", () => {
   it("rate-limits tokens per agent and per team at the ratelimit service, failing closed", () => {
     const global = policy.spec.traffic.rateLimit.global;
     expect(global.backendRef).toMatchObject({ name: "ratelimit", port: 8081 });
-    expect(global.domain).toBe("agw");
+    expect(global.domain).toBe(RATELIMIT_DOMAIN);
     expect(global.failureMode).toBe("FailClosed");
     expect(global.descriptors).toEqual([
       { unit: "Tokens", entries: [{ name: "agent", expression: 'apiKey.team + "." + apiKey.agent' }] },
@@ -68,5 +69,23 @@ describe("token caps on the model route", () => {
 
   it("keeps the key requirement", () => {
     expect(policy.spec.traffic.apiKeyAuthentication.mode).toBe("Strict");
+  });
+});
+
+describe("the ratelimit config name and domain agree everywhere", () => {
+  const CONFIGMAP = "ratelimit-config";
+  const shell = (name: string) => new RegExp(`^${name}="([^"]+)"`, "m").exec(readFileSync(join(PLATFORM_DIR, "caps.sh"), "utf8"))?.[1];
+
+  it("caps.sh reads the ConfigMap and domain the service and the gateway use", () => {
+    expect(find(load("ratelimit.yaml"), "ConfigMap", CONFIGMAP, NS)).toBeDefined();
+    expect(shell("RATELIMIT_CONFIGMAP")).toBe(CONFIGMAP);
+    expect(shell("DOMAIN")).toBe(RATELIMIT_DOMAIN);
+  });
+
+  it("the minter's chart names the same ConfigMap", () => {
+    const r = render(TEAMS_CHART, "teams", "argocd", [valuesFile({ teams: ["platform"], workerImage: "w@sha256:" + "a".repeat(64), gitops: { repoURL: "https://github.com/x/y.git", revision: "main" }, minter: { image: "n@sha256:" + "b".repeat(64), source: { main: "//" } }, budgets: { platform: 1 } })]);
+    expect(r.ok, r.output).toBe(true);
+    const env = r.objects.find((o) => o.kind === "CronJob")!.spec.jobTemplate.spec.template.spec.containers[0].env as { name: string; value: string }[];
+    expect(env.find((e) => e.name === "MINTER_RATELIMIT_CONFIGMAP")?.value).toBe(CONFIGMAP);
   });
 });
