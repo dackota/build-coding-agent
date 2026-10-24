@@ -1,7 +1,7 @@
 {{- include "agent.check" . -}}
 {{- if eq .Values.runtime "byo" }}
-# runtime byo: the team's own image, by digest, on the team's WorkerPool. The image's own
-# entrypoint runs it (docs/byo-contract.md); the Agent's harnessRef names this Harness.
+# runtime byo: the team's own image, by digest, on the team's WorkerPool. kagent requires the
+# command (docs/byo-contract.md); the Agent's harnessRef names this Harness.
 apiVersion: api.kagent.dev/v1alpha3
 kind: Harness
 metadata:
@@ -13,6 +13,7 @@ spec:
   byo: {}
   workload:
     image: {{ .Values.image | quote }}
+    command: {{ .Values.command | toJson }}
   substrate:
     workerPoolRef: {name: team-default}
     snapshotPolicy:

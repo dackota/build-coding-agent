@@ -21,11 +21,12 @@ team: platform
 owner: your-github-handle
 runtime: byo
 image: 172.18.0.3:5000/my-agent@sha256:<64 hex>
+command: ["node", "/app/src/main.ts"]
 model: glm-5.3-flash
 systemPrompt: You are a concise assistant.
 ```
 
-The Harness sets no command, so the image's `ENTRYPOINT` is what runs. The key, token cap,
+`command` is what the Harness runs (kagent refuses a byo Harness without one); give the same one as the image's `ENTRYPOINT`. The key, token cap,
 tool list and egress come from the values file like any other agent's.
 
 ## 1. A2A over gRPC

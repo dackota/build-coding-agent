@@ -17,6 +17,7 @@ const BYO = {
   description: "A byo agent",
   runtime: "byo",
   image: IMAGE,
+  command: ["node", "/app/src/main.ts"],
   model: "glm-5.3-flash",
   systemPrompt: "You are a concise assistant. Reply briefly.",
   tokenCap: 1_000_000,
@@ -31,7 +32,7 @@ describe("agent chart: byo runtime", () => {
     expect(harness.apiVersion).toBe("api.kagent.dev/v1alpha3");
     expect(harness.spec).toEqual({
       byo: {},
-      workload: { image: IMAGE },
+      workload: { image: IMAGE, command: ["node", "/app/src/main.ts"] },
       substrate: { workerPoolRef: { name: "team-default" }, snapshotPolicy: { location: "gs://ate-snapshots/kagent/" } },
     });
     expect(find(r.objects, "Agent", "byo-starter", NS)!.spec.harnessRef).toEqual({ name: "byo-starter" });
@@ -40,7 +41,7 @@ describe("agent chart: byo runtime", () => {
   it("gives a byo agent the same key, cap and tool list as a coding agent", () => {
     const tools = ["github-read", { name: "github-write" }];
     const byo = renderByo({ ...BYO, tools });
-    const coding = render(AGENT_CHART, "byo-starter", NS, [valuesFile({ ...BYO, runtime: "coding", image: undefined, tools })]);
+    const coding = render(AGENT_CHART, "byo-starter", NS, [valuesFile({ ...BYO, runtime: "coding", image: undefined, command: undefined, tools })]);
     expect(byo.ok, byo.output).toBe(true);
     expect(coding.ok, coding.output).toBe(true);
     for (const [kind, name] of [["ModelConfig", "byo-starter-model"], ["AgentTemplate", "byo-starter"]] as const) {
@@ -79,6 +80,18 @@ describe("agent chart: byo runtime", () => {
     const r = renderByo(noImage);
     expect(r.ok).toBe(false);
     expect(r.output).toMatch(/image/);
+  });
+
+  // kagent refuses a byo Harness with no workload.command, so the values file must give one.
+  it("rejects byo with no command, and command on a non-byo runtime", () => {
+    const { command: _command, ...noCommand } = BYO;
+    expect(renderByo(noCommand).ok).toBe(false);
+    for (const runtime of ["stock", "coding"]) {
+      const { image: _image, ...rest } = BYO;
+      const r = renderByo({ ...rest, runtime });
+      expect(r.ok, runtime).toBe(false);
+      expect(r.output, runtime).toMatch(/command/);
+    }
   });
 
   it("rejects image on a non-byo runtime", () => {
