@@ -1,0 +1,73 @@
+# Reusable workflow: build a byo agent image, push it, and print its digest for the values
+# file (docs/byo-contract.md). Call it from your own workflow:
+#
+#   jobs:
+#     image:
+#       uses: dackota/build-coding-agent/.github/workflows/build-byo-image.yml@main
+#       with:
+#         context: agents/my-agent
+#         image: ghcr.io/my-org/my-agent
+#     use-it:
+#       needs: image
+#       runs-on: ubuntu-latest
+#       steps:
+#         - run: echo "digest is ${{ needs.image.outputs.digest }}"
+name: build-byo-image
+
+on:
+  workflow_call:
+    inputs:
+      context:
+        description: The folder with the Dockerfile, relative to the calling repository's root
+        type: string
+        required: true
+      image:
+        description: The repository to push to, without a tag, e.g. ghcr.io/my-org/my-agent
+        type: string
+        required: true
+      registry:
+        description: The registry to log in to
+        type: string
+        default: ghcr.io
+    outputs:
+      digest:
+        description: The pushed image's digest, sha256:<64 hex>
+        value: ${{ jobs.build.outputs.digest }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ inputs.context }}
+          push: true
+          tags: ${{ inputs.image }}:${{ github.sha }}
+      - name: Print the digest
+        env:
+          IMAGE: ${{ inputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          echo "image: ${IMAGE}@${DIGEST}"
+          {
+            echo "### Image digest"
+            echo
+            echo "Paste this into your values file:"
+            echo
+            echo '```yaml'
+            echo "image: ${IMAGE}@${DIGEST}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

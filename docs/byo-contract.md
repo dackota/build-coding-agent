@@ -29,6 +29,28 @@ systemPrompt: You are a concise assistant.
 `command` is what the Harness runs (kagent refuses a byo Harness without one); give the same one as the image's `ENTRYPOINT`. The key, token cap,
 tool list and egress come from the values file like any other agent's.
 
+## Check your image
+
+```
+make byo-push DIR=templates/byo-ts NAME=my-agent   # prints the image line
+make byo-check IMAGE=<the address@sha256:digest from that line>
+```
+
+`make byo-check` runs your image as a pod in a throwaway namespace on the local kind cluster,
+plays kagent's side (the task store, the model route, the config) from a checker pod, and
+prints PASS, FAIL or skip for each rule below, then deletes the namespace. It exits non-zero
+when a rule fails, and the FAIL line says what it saw. It checks rules 1 to 6. Rules 7 to 9
+depend on your tools, approvals and the egress gateway, so it skips them; test those on a
+deployed agent.
+
+## Build in CI
+
+`.github/workflows/build-byo-image.yml` is a reusable workflow: call it with `context` (the
+folder with your Dockerfile) and `image` (the repository to push to), and it builds, pushes,
+prints `image: <repository>@sha256:...` in the job summary, and outputs `digest` to later
+jobs. The values schema accepts only the platform's allowed registry (the local one on kind),
+so on kind use `make byo-push`.
+
 ## 1. A2A over gRPC
 
 Serve the A2A protocol (v1) over gRPC, as a task-based server: a message starts a task, and
