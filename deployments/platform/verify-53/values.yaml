@@ -1,9 +1,0 @@
-# verify 53-r1: a throwaway stock agent to prove the minter keys a new folder.
-name: verify-53
-team: platform
-owner: dackota
-description: Throwaway agent for ticket 53's proof
-runtime: stock
-model: glm-5.3-flash
-tokenCap: 1000
-systemPrompt: You are a concise assistant. Reply briefly.
