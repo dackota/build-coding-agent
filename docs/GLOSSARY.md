@@ -10,7 +10,7 @@ _Avoid_: custom agent, BYO harness
 
 **Harness**:
 The kagent resource that says which image runs an agent and on which Substrate worker pool.
-_Avoid_: runtime, deployment
+_Avoid_: runtime, deployment (`runtime` is only the values-file field that picks `stock`, `coding` or `byo`; the kagent object is the Harness)
 
 **AgentTemplate**:
 The kagent resource that holds an agent's model, system prompt, MCP tool bindings, and subagents.
@@ -45,19 +45,27 @@ A group that ships agents, named on the team list `platform/teams.txt`. Its agen
 _Avoid_: tenant, org
 
 **Team base**:
-The platform-owned objects in each team namespace that the team's agents resolve: WorkerPool and ServiceAccount `team-default`, `default-model-config`, Harness `kagent-stock`, Harness `coding` (pinned by `make deploy`), the subagent templates `explorer`, `executor` and `reviewer`, the catalog RemoteMCPServers, and the git and npm EgressPolicies. Teams cannot change it.
+The platform-owned objects in each team namespace that the team's agents resolve: WorkerPool and ServiceAccount `team-default`, `default-model-config`, Harness `kagent-stock`, Harness `coding` (pinned by `make deploy`), the subagent templates `explorer`, `executor` and `reviewer`, and the git and npm EgressPolicies. Teams cannot change it. The catalog RemoteMCPServers are not in it: each agent gets its own, keyed by its agent key.
 _Avoid_: team defaults, shared config
 
 **Values file**:
 One agent's `deployments/<team>/<agent>/values.yaml`, checked against the strict schema of `platform/charts/agent`. Its `runtime` field (`stock`, `coding`, `byo`) picks how the agent runs; the kagent object is still called the Harness.
 _Avoid_: agent YAML, manifest
 
+**Catalog tool**:
+A tool a values file names in `tools` (`github-read`, `github-write`, `demo-delete-branch`). The catalog (`agent.catalog` in `platform/charts/agent/templates/_helpers.tpl`) maps each name to an MCP server behind agentgateway, its tool list, and whether it needs approval. A write tool always does.
+_Avoid_: plugin, integration
+
 **Registration**:
-The ConfigMap `<agent>-registration` the values-file chart renders next to the agent: team, agent, owner, model, and token cap, for the platform to read.
+The ConfigMap `<agent>-registration` the values-file chart renders next to the agent: team, agent, owner, model, token cap, MCP tool names, and GitHub repos (`githubRepos`, from `github.repos`), for the platform to read.
 _Avoid_: agent record
 
+**Token cap**:
+A monthly limit on model tokens, enforced at agentgateway through Envoy's `ratelimit` service and Redis. Each call is checked against two caps: the agent's (`tokenCap` in its values file) and its team's (the **team budget** in `platform/budgets.txt`, which no team can edit). Over either, the call gets HTTP 429. The minter writes both into the ratelimit config; a team with no budget gets no keys. `make status` prints use against each cap. The window is the service's month, 30 days.
+_Avoid_: quota, spend limit
+
 **Minter**:
-The platform's CronJob in `platform-system` (`agent/src/minter/`) that runs every minute, reads the registrations of every listed team, and gives each agent its own agent key; it removes the key of an agent whose registration is gone. Its pure core is `plan()`.
+The platform's CronJob in `platform-system` (`agent/src/minter/`) that runs every minute, reads the registrations of every listed team, and gives each agent its own agent key, token cap and MCP tool policy at agentgateway (its tools, with GitHub write calls held to its repo list); it removes all three when the agent's registration is gone. Its pure core is `plan()`.
 _Avoid_: key operator, provisioner
 
 **Agent key**:

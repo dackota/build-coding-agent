@@ -11,6 +11,9 @@ images:
 minter:
   image: ""
   source: {}
+# install.sh sets this from platform/budgets.txt: each team's monthly token budget. A team
+# with none gets no keys.
+budgets: {}
 argocdNamespace: argocd
 gitops:
   repoURL: https://github.com/dackota/build-coding-agent.git

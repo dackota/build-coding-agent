@@ -1,0 +1,7 @@
+after deleting capprobe's registration:
+      "value": "platform.docs-agent",
+      "value": "platform.hello-agent",
+      "value": "platform.triage-agent",
+      "value": "platform",
+Error from server (NotFound): secrets "capprobe-agent-key" not found
+0

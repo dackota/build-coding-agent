@@ -2,6 +2,7 @@
 // Argo CD renders it per agent folder with the folder's name as the release name and
 // team-<team> as the namespace; these tests render it the same way.
 import { describe, expect, it } from "vitest";
+import { REPO_TOOLS } from "../src/minter/plan.ts";
 import { AGENT_CHART, find, render, valuesFile } from "./chart-helpers.ts";
 
 const STOCK = {
@@ -42,7 +43,41 @@ describe("agent chart: stock runtime", () => {
 
     const registration = find(r.objects, "ConfigMap", "tracer-registration", NS)!;
     expect(registration.metadata.labels?.["agents.build-coding-agent.dev/registration"]).toBe("true");
-    expect(registration.data).toEqual({ team: "platform", agent: "tracer", owner: "dackota", runtime: "stock", model: "glm-5.3-flash", tokenCap: "1000000" });
+    expect(registration.data).toEqual({ team: "platform", agent: "tracer", owner: "dackota", runtime: "stock", model: "glm-5.3-flash", tokenCap: "1000000", mcpTools: "[]", githubRepos: "[]" });
+  });
+
+  it("the registration lists the MCP tool names of the agent's catalog tools", () => {
+    const r = renderValues({ ...STOCK, tools: ["github-read", { name: "github-write" }, "demo-delete-branch"] });
+    expect(r.ok, r.output).toBe(true);
+    const registration = find(r.objects, "ConfigMap", "tracer-registration", NS)!;
+    expect(JSON.parse(registration.data.mcpTools)).toEqual(["issue_read", "create_branch", "push_files", "create_pull_request", "delete_branch"]);
+  });
+
+  it("renders one RemoteMCPServer per catalog server, at agentgateway's MCP route, keyed by the agent's own key", () => {
+    const r = renderValues({ ...STOCK, tools: ["github-read", "github-write", "demo-delete-branch"] });
+    expect(r.ok, r.output).toBe(true);
+    const servers = r.objects.filter((o) => o.kind === "RemoteMCPServer");
+    expect(servers.map((s) => s.metadata.name).sort()).toEqual(["tracer-demo-mcp", "tracer-github-mcp"]);
+    const header = [{ name: "x-agent-key", valueFrom: { type: "Secret", name: "tracer-agent-key", key: "OPENAI_API_KEY" } }];
+    expect(find(r.objects, "RemoteMCPServer", "tracer-github-mcp", NS)!.spec).toEqual({
+      description: "GitHub through agentgateway, which holds the token",
+      protocol: "STREAMABLE_HTTP",
+      url: "http://agentgateway-proxy.agentgateway-system.svc.cluster.local/mcp/github",
+      headersFrom: header,
+    });
+    expect(find(r.objects, "RemoteMCPServer", "tracer-demo-mcp", NS)!.spec).toMatchObject({
+      protocol: "STREAMABLE_HTTP",
+      url: "http://agentgateway-proxy.agentgateway-system.svc.cluster.local/mcp/demo",
+      headersFrom: header,
+    });
+    // No server outside agentgateway, and no GitHub token anywhere in what the agent gets.
+    expect(r.output).not.toMatch(/github-mcp\.github-mcp\.svc|demo-mcp\.demo-mcp\.svc|github-mcp-token/);
+  });
+
+  it("renders no RemoteMCPServer for an agent with no catalog tools", () => {
+    const r = renderValues(STOCK);
+    expect(r.ok, r.output).toBe(true);
+    expect(r.objects.filter((o) => o.kind === "RemoteMCPServer")).toEqual([]);
   });
 
   it("renders the agent's own ModelConfig naming its key Secret", () => {
@@ -171,9 +206,9 @@ describe("agent chart: coding runtime", () => {
     const r = renderValues({ ...STOCK, tools: ["github-read", "github-write", "demo-delete-branch"] });
     expect(r.ok, r.output).toBe(true);
     expect(find(r.objects, "AgentTemplate", "tracer", NS)!.spec.tools).toEqual([
-      { mcp: { server: { kind: "RemoteMCPServer", name: "github-mcp" }, tools: ["issue_read"] } },
-      { mcp: { server: { kind: "RemoteMCPServer", name: "github-mcp" }, tools: ["create_branch", "push_files", "create_pull_request"], requireApproval: true } },
-      { mcp: { server: { kind: "RemoteMCPServer", name: "demo-mcp" }, tools: ["delete_branch"], requireApproval: true } },
+      { mcp: { server: { kind: "RemoteMCPServer", name: "tracer-github-mcp" }, tools: ["issue_read"] } },
+      { mcp: { server: { kind: "RemoteMCPServer", name: "tracer-github-mcp" }, tools: ["create_branch", "push_files", "create_pull_request"], requireApproval: true } },
+      { mcp: { server: { kind: "RemoteMCPServer", name: "tracer-demo-mcp" }, tools: ["delete_branch"], requireApproval: true } },
     ]);
   });
 
@@ -181,7 +216,7 @@ describe("agent chart: coding runtime", () => {
     const r = renderValues({ ...STOCK, tools: [{ name: "github-read", requireApproval: true }] });
     expect(r.ok, r.output).toBe(true);
     expect(find(r.objects, "AgentTemplate", "tracer", NS)!.spec.tools).toEqual([
-      { mcp: { server: { kind: "RemoteMCPServer", name: "github-mcp" }, tools: ["issue_read"], requireApproval: true } },
+      { mcp: { server: { kind: "RemoteMCPServer", name: "tracer-github-mcp" }, tools: ["issue_read"], requireApproval: true } },
     ]);
   });
 
@@ -241,5 +276,42 @@ describe("agent chart: coding runtime", () => {
     const r = render(AGENT_CHART, "tracer", NS, [valuesFile({ ...CODING, skills: ["evil"] }), valuesFile(PLATFORM)]);
     expect(r.ok).toBe(false);
     expect(r.output).toMatch(/skills/);
+  });
+});
+
+describe("agent chart: github repos", () => {
+  const registrationOf = (r: ReturnType<typeof renderValues>) => find(r.objects, "ConfigMap", "tracer-registration", NS)!;
+
+  it("accepts owner/name entries and lists them in the registration", () => {
+    const repos = ["dackota/test-repo", "acme/.github", "Org-1/Repo_2.js", `${"o".repeat(39)}/${"r".repeat(100)}`];
+    const r = renderValues({ ...STOCK, tools: ["github-write"], github: { repos } });
+    expect(r.ok, r.output).toBe(true);
+    expect(JSON.parse(registrationOf(r).data.githubRepos)).toEqual(repos);
+  });
+
+  it("rejects a repo entry that is not owner/name", () => {
+    const bad = ["", "dackota", "dackota/", "/repo", "a/b/c", "a b/c", 'a"/b', "-lead/x", "a/..", "a/.", `${"o".repeat(40)}/r`, `o/${"r".repeat(101)}`, "https://github.com/a/b"];
+    for (const repo of bad) {
+      const r = renderValues({ ...STOCK, github: { repos: [repo] } });
+      expect(r.ok, JSON.stringify(repo)).toBe(false);
+      expect(r.output, JSON.stringify(repo)).toContain("at '/github/repos/0'");
+    }
+  });
+
+  it("rejects an unknown field under github, and a repo listed twice", () => {
+    const unknown = renderValues({ ...STOCK, github: { repos: [], token: "x" } });
+    expect(unknown.ok).toBe(false);
+    expect(unknown.output).toMatch(/token/);
+    const twice = renderValues({ ...STOCK, github: { repos: ["a/b", "a/b"] } });
+    expect(twice.ok).toBe(false);
+    expect(twice.output).toMatch(/github\/repos/);
+  });
+
+  it("every github-write tool is one the minter scopes to the repo list", () => {
+    const r = renderValues({ ...STOCK, tools: ["github-write"] });
+    expect(r.ok, r.output).toBe(true);
+    const writeTools = JSON.parse(registrationOf(r).data.mcpTools) as string[];
+    expect(writeTools.length).toBeGreaterThan(0);
+    for (const t of writeTools) expect(REPO_TOOLS, t).toContain(t);
   });
 });

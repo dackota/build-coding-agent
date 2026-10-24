@@ -16,3 +16,8 @@ data:
   runtime: {{ .Values.runtime | quote }}
   model: {{ .Values.model | quote }}
   tokenCap: {{ .Values.tokenCap | int64 | toString | quote }}
+  # The MCP tool names of its catalog tools: the minter's tool policy allows only these.
+  mcpTools: {{ include "agent.mcpToolNames" . | quote }}
+  # The repos (owner/name) its GitHub write tools may change: the policy refuses a write call
+  # on any other repo, and every write call when the list is empty.
+  githubRepos: {{ (.Values.github | default dict).repos | default list | toJson | quote }}

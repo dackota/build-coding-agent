@@ -1,0 +1,15 @@
+folder deleted (pushed): 2026-10-24T16:32:14Z
+now: 2026-10-24T16:34:01Z
+application:
+Error from server (NotFound): applications.argoproj.io "platform-verify-53" not found
+agent:
+Error from server (NotFound): agents.api.kagent.dev "verify-53" not found
+registration:
+Error from server (NotFound): configmaps "verify-53-registration" not found
+key Secret:
+Error from server (NotFound): secrets "verify-53-agent-key" not found
+hash entry platform.verify-53: []
+entries left: platform.docs-agent platform.hello-agent platform.triage-agent 
+minter log:
+[pod/minter-29880994-826j9/minter] {"time":"2026-10-24T16:34:00.647Z","event":"applied","kind":"delete-hash","entry":"platform.verify-53"}
+[pod/minter-29880994-826j9/minter] {"time":"2026-10-24T16:34:00.647Z","event":"applied","kind":"delete-secret","namespace":"team-platform","name":"verify-53-agent-key"}

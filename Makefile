@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down status smoke preflight deploy chat byo-push
+.PHONY: help up down status smoke preflight deploy chat byo-push byo-check
 
 help: ## List the targets
 	@grep -E '^[a-z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "%-8s %s\n", $$1, $$2}'
@@ -33,3 +33,6 @@ chat: ## Send one message to an agent (default hello-agent of team platform): ma
 
 byo-push: ## Build a byo image and push it to the local registry; prints the image line for a values file: make byo-push DIR=templates/byo-ts NAME=my-agent
 	platform/byo-push.sh "$(DIR)" "$(NAME)"
+
+byo-check: ## Check a byo image against the contract on kind, one pass or fail per rule: make byo-check IMAGE=<line from byo-push>
+	platform/byo-check.sh "$(IMAGE)"

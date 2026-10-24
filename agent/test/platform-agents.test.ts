@@ -22,17 +22,32 @@ describe("platform team agents", () => {
     expect(readdirSync(join(REPO_ROOT, "deployments", "platform")).sort()).toEqual(["docs-agent", "hello-agent", "triage-agent"]);
   });
 
-  it("hello-agent runs on coding with the three subagents, github-write and demo-delete-branch behind approval", () => {
+  it("hello-agent runs on coding with the three subagents, github-read, and github-write and demo-delete-branch behind approval", () => {
     const { template, agent } = renderAgent("hello-agent");
     expect(agent.spec.harnessRef).toEqual({ name: "coding" });
     expect(agent.spec.egressPolicyRefs).toEqual([{ name: "git-egress" }, { name: "npm-egress" }]);
     const tools = template.spec.tools as { mcp?: { server: { name: string }; tools: string[]; requireApproval?: boolean }; subAgent?: { name: string } }[];
     expect(tools.filter((t) => t.mcp).map((t) => t.mcp)).toEqual([
-      { server: { kind: "RemoteMCPServer", name: "github-mcp" }, tools: ["create_branch", "push_files", "create_pull_request"], requireApproval: true },
-      { server: { kind: "RemoteMCPServer", name: "demo-mcp" }, tools: ["delete_branch"], requireApproval: true },
+      { server: { kind: "RemoteMCPServer", name: "hello-agent-github-mcp" }, tools: ["issue_read"] },
+      { server: { kind: "RemoteMCPServer", name: "hello-agent-github-mcp" }, tools: ["create_branch", "push_files", "create_pull_request"], requireApproval: true },
+      { server: { kind: "RemoteMCPServer", name: "hello-agent-demo-mcp" }, tools: ["delete_branch"], requireApproval: true },
     ]);
     expect(tools.filter((t) => t.subAgent).map((t) => t.subAgent!.name)).toEqual(["explorer", "executor", "reviewer"]);
     expect(template.spec.systemPrompt).toContain("create_pull_request");
+  });
+
+  it("hello-agent's tool policy allows issue_read, which /implement reads the issue with", () => {
+    const r = render(AGENT_CHART, "hello-agent", NS, [valuesOf("hello-agent"), PLATFORM_VALUES]);
+    expect(r.ok, r.output).toBe(true);
+    const registration = find(r.objects, "ConfigMap", "hello-agent-registration", NS)!;
+    expect(JSON.parse(registration.data.mcpTools as string)).toContain("issue_read");
+  });
+
+  it("hello-agent lists dackota/test-repo, the repo /implement works on", () => {
+    const r = render(AGENT_CHART, "hello-agent", NS, [valuesOf("hello-agent"), PLATFORM_VALUES]);
+    expect(r.ok, r.output).toBe(true);
+    const registration = find(r.objects, "ConfigMap", "hello-agent-registration", NS)!;
+    expect(JSON.parse(registration.data.githubRepos as string)).toEqual(["dackota/test-repo"]);
   });
 
   it("docs-agent runs on coding with its docs-style skill and the explorer subagent", () => {

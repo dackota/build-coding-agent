@@ -1,11 +1,14 @@
 # Building on the platform
 
-How to add your own agents, tools, and models to the cluster `make up` builds.
+How a team builds on the cluster `make up` builds, and how the platform team extends it.
+To ship an agent, read the [dev guide](dev-guide.md) first. The [guard rails](guard-rails.md)
+say what stays fixed.
 
 **To ship an agent, write a values file**, not kagent YAML:
 `deployments/<team>/<agent>/values.yaml`, deployed by Argo CD into `team-<team>`. See
-[../deployments/README.md](../deployments/README.md). Recipes 1 and 2 below are values files.
-The other recipes show the kagent objects underneath. They are platform changes: the team
+[../deployments/README.md](../deployments/README.md). Recipes 1 and 2 below are values files, and so are the `tools` and `subagents` lines of
+recipes 3 and 6. Recipes 4, 5 and 7 and the sections after them are for the platform team:
+they show the kagent objects underneath, and a team does not write them. They are platform changes: the team
 base in `platform/charts/teams/` (every team namespace gets its own copy) or the catalog in
 `platform/charts/agent/`. A team cannot apply them: its Argo CD project allows only the
 kinds the values-file chart renders.
@@ -84,12 +87,15 @@ keep yours short.
 
 ## Recipe 3: reuse an existing MCP server (catalog tools)
 
-**Tested:** yes, for our coding agent (`github-write` and `demo-delete-branch` on
-`hello-agent`) and for the stock runtime (`github-read` on `triage-agent`).
+**Tested:** yes, for our coding agent (`github-read`, `github-write` and `demo-delete-branch`
+on `hello-agent`) and for the stock runtime (`github-read` on `triage-agent`).
 
 A values file picks tools by catalog name. The catalog (`agent.catalog` in
-`platform/charts/agent/templates/_helpers.tpl`) maps each name to a team base
-`RemoteMCPServer`, its tools, and whether it writes:
+`platform/charts/agent/templates/_helpers.tpl`) maps each name to a catalog MCP server, its
+tools, and whether it writes. Each server sits behind agentgateway (`/mcp/github`,
+`/mcp/demo` in `platform/gateway.yaml`); the chart gives the agent its own `RemoteMCPServer`
+for it, `<agent>-<server>`, that sends the agent's key in `x-agent-key`, and the minter's
+policy for the agent lets it see and call only the tools of its catalog names:
 
 | Catalog name | Server | Tools | Approval |
 |---|---|---|---|
@@ -102,14 +108,27 @@ The chart renders each as a template binding:
 ```yaml
   tools:
     - mcp:
-        server: {kind: RemoteMCPServer, name: github-mcp}
+        server: {kind: RemoteMCPServer, name: hello-agent-github-mcp}
         tools: [create_branch, push_files, create_pull_request]
         requireApproval: true
 ```
 
-- `tools` limits what the model sees. Leave out a tool and the model cannot call it.
+- `tools` limits what the model sees. Leave out a tool and the model cannot call it, and
+  the gateway refuses it to `curl` too. `/implement` reads the issue with `issue_read`, so
+  an agent that runs it needs `github-read` as well as `github-write`.
 - `requireApproval: true` pauses before every call (approve, deny, or approve for the
   session). The schema refuses `requireApproval: false` on a write tool.
+- `github.repos` lists the repos `github-write` may change, as `owner/name` (the schema
+  refuses anything else). The minter puts them in the agent's tool policy: a
+  `create_branch`, `push_files` or `create_pull_request` call on any other repo answers
+  `Unknown tool`. With no list, every one of those calls is refused. Names are compared as
+  written, so call a repo with the case the list uses.
+
+  ```yaml
+  tools: [github-read, github-write]
+  github:
+    repos: [dackota/test-repo]
+  ```
 
 ## Recipe 4: add a new MCP server
 
@@ -117,35 +136,17 @@ The chart renders each as a template binding:
 
 1. Run the server in its own namespace, with a Service. `platform/demo-mcp.yaml` is a small
    example.
-2. Register it in the team base (`platform/charts/teams/templates/coding.yaml`), so every
-   team namespace has it:
+2. Put it behind agentgateway in `platform/gateway.yaml`, as `demo-mcp` is: an
+   `AgentgatewayBackend` with one target, an `HTTPRoute` at `/mcp/<name>` that removes
+   `x-agent-key`, and the route and backend added to the `mcp-agent-keys` and
+   `mcp-deny-floor` policies. Add the backend to `MINTER_MCP_BACKENDS` in
+   `platform/charts/teams/templates/minter.yaml`, so each agent's tool policy covers it.
+3. Add the server to `agent.mcpServers` and a catalog name for it to `agent.catalog`
+   (Recipe 3), and the name to the schema's tool enum.
 
-```yaml
-apiVersion: api.kagent.dev/v1alpha3
-kind: RemoteMCPServer
-metadata: {name: my-mcp, namespace: team-platform}
-spec:
-  description: What it does
-  protocol: STREAMABLE_HTTP
-  url: http://my-mcp.my-mcp.svc.cluster.local:8080/mcp
-```
-
-3. Add a catalog name for it (Recipe 3) and to the schema's tool enum.
-
-**If it needs a secret, take the header from a Secret with `headersFrom`.** Do what
-`github-mcp` does: a Secret in each team namespace holds the full header value (for example
-`Bearer <token>`), and the `RemoteMCPServer` names it:
-
-```yaml
-  headersFrom:
-    - name: Authorization
-      valueFrom: {type: Secret, name: my-mcp-token, key: token}
-```
-
-kagent puts only `__KAGENT_ENV[KAGENT_CREDENTIAL_<hash>]__` in the agent's config and a
-placeholder in the actor's env. The agent sends the placeholder, and Substrate's egress
-gateway swaps it for the Secret as the request leaves the actor. Never put a secret in a
-plain `value` header: kagent copies those into the agent's config.
+**If it needs a secret, the gateway holds it.** Do what `github-mcp` does: a Secret in
+`agentgateway-system` and `policies.auth.secretRef` on the backend. agentgateway adds it to
+the request it sends the server; no team namespace and no actor holds it.
 
 ## Recipe 5: a new model
 
@@ -233,7 +234,8 @@ Agents live in `deployments/`; Argo CD deploys them. Platform objects go in the 
 `<allowed registry>/<path>@sha256:<64 hex>` (a tag or another registry is refused), and the
 chart renders a Harness for it. Start from `templates/byo-ts`, build and push it with
 `make byo-push DIR=templates/byo-ts NAME=my-agent`, and follow
-[the byo contract](byo-contract.md).
+[the byo contract](byo-contract.md). Before you open a pull request, run
+`make byo-check IMAGE=<the line byo-push printed>`: it reports pass or fail per rule.
 
 ## What a byo image must do itself
 

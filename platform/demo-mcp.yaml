@@ -1,8 +1,8 @@
 # A tiny MCP server for the requireApproval check: one tool, delete_branch, that deletes
 # nothing and logs every call. Streamable HTTP, JSON answers, no dependencies (node only).
-# The Deployment runs in its own namespace; the RemoteMCPServer must sit beside the
-# AgentTemplate that binds it, so each team base has one (platform/charts/teams/templates/coding.yaml),
-# and the catalog tool demo-delete-branch binds it with requireApproval.
+# The Deployment runs in its own namespace, behind agentgateway's route /mcp/demo
+# (platform/gateway.yaml); each agent with the catalog tool demo-delete-branch gets its own
+# RemoteMCPServer for it (platform/charts/agent/templates/mcp-servers.yaml), with requireApproval.
 apiVersion: v1
 kind: Namespace
 metadata: {name: demo-mcp}

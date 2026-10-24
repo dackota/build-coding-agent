@@ -7,6 +7,9 @@ import { request } from "node:https";
 export type ObjectMeta = { name: string; labels: Record<string, string>; annotations: Record<string, string> };
 export type ConfigMapObject = { name: string; labels: Record<string, string>; data: Record<string, string> };
 export type SecretWrite = { name: string; labels: Record<string, string>; annotations: Record<string, string>; stringData: Record<string, string> };
+export type TargetRef = { group: string; kind: string; name: string };
+/** An AgentgatewayPolicy that allows MCP tools on its target backends (spec.backend.mcp.authorization, action Allow). */
+export type McpPolicy = { name: string; labels: Record<string, string>; targetRefs: TargetRef[]; matchExpressions: string[] };
 
 export interface KubeClient {
   listConfigMaps(namespace: string, labelSelector: string): Promise<ConfigMapObject[]>;
@@ -18,7 +21,27 @@ export interface KubeClient {
   deleteSecret(namespace: string, name: string): Promise<void>;
   /** A JSON merge patch of the ConfigMap's data: null removes an entry. */
   patchConfigMapData(namespace: string, name: string, data: Record<string, string | null>): Promise<void>;
+  listMcpPolicies(namespace: string, labelSelector: string): Promise<McpPolicy[]>;
+  /** Create the policy, or replace its labels, targets and rule when it exists. */
+  putMcpPolicy(namespace: string, policy: McpPolicy): Promise<void>;
+  deleteMcpPolicy(namespace: string, name: string): Promise<void>;
 }
+
+const POLICIES = (namespace: string) => `/apis/agentgateway.dev/v1alpha1/namespaces/${encodeURIComponent(namespace)}/agentgatewaypolicies`;
+type RawPolicy = { metadata?: RawMeta; spec?: { targetRefs?: TargetRef[]; backend?: { mcp?: { authorization?: { action?: string; policy?: { matchExpressions?: string[] } } } } } };
+
+/** The policy as the minter wrote it; a policy that is not an Allow rule reads as no rule. */
+function toMcpPolicy(raw: RawPolicy): McpPolicy {
+  const auth = raw.spec?.backend?.mcp?.authorization;
+  return {
+    name: raw.metadata?.name ?? "",
+    labels: raw.metadata?.labels ?? {},
+    targetRefs: (raw.spec?.targetRefs ?? []).map((t) => ({ group: t.group, kind: t.kind, name: t.name })),
+    matchExpressions: auth?.action === "Allow" ? (auth.policy?.matchExpressions ?? []) : [],
+  };
+}
+
+const mcpPolicySpec = (p: McpPolicy) => ({ targetRefs: p.targetRefs, backend: { mcp: { authorization: { action: "Allow", policy: { matchExpressions: p.matchExpressions } } } } });
 
 const SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount";
 const STATUS_NOT_FOUND = 404;
@@ -118,6 +141,27 @@ export function inClusterKube(env: NodeJS.ProcessEnv = process.env): KubeClient 
     },
     async patchConfigMapData(namespace, name, data) {
       await ok("PATCH", `/api/v1/namespaces/${enc(namespace)}/configmaps/${enc(name)}`, { data }, { "content-type": "application/merge-patch+json" });
+    },
+    async listMcpPolicies(namespace, labelSelector) {
+      const res = await ok("GET", `${POLICIES(namespace)}?labelSelector=${enc(labelSelector)}`);
+      return ((JSON.parse(res.body) as { items?: RawPolicy[] }).items ?? []).map(toMcpPolicy);
+    },
+    async putMcpPolicy(namespace, policy) {
+      const object = {
+        apiVersion: "agentgateway.dev/v1alpha1",
+        kind: "AgentgatewayPolicy",
+        metadata: { name: policy.name, namespace, labels: policy.labels },
+        spec: mcpPolicySpec(policy),
+      };
+      const created = await call("POST", POLICIES(namespace), object, { "content-type": "application/json" });
+      if (isSuccess(created.status)) return;
+      if (created.status !== STATUS_CONFLICT) throw new KubeError(created.status, `POST agentgatewaypolicy ${namespace}/${policy.name}: ${created.status} ${created.body.slice(0, 300)}`);
+      // A merge patch replaces the lists whole (targetRefs, matchExpressions); a custom resource's PUT would need its resourceVersion.
+      await ok("PATCH", `${POLICIES(namespace)}/${enc(policy.name)}`, { metadata: { labels: policy.labels }, spec: mcpPolicySpec(policy) }, { "content-type": "application/merge-patch+json" });
+    },
+    async deleteMcpPolicy(namespace, name) {
+      const res = await call("DELETE", `${POLICIES(namespace)}/${enc(name)}`);
+      if (!isSuccess(res.status) && res.status !== STATUS_NOT_FOUND) throw new KubeError(res.status, `DELETE agentgatewaypolicy ${namespace}/${name}: ${res.status}`);
     },
   };
 }

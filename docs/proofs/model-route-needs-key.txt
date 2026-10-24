@@ -1,0 +1,21 @@
+## POST /v1/chat/completions, no key
+HTTP/1.1 401 Unauthorized
+content-type: text/plain
+content-length: 48
+date: Sat, 24 Oct 2026 16:27:23 GMT
+
+api key authentication failure: no API Key found
+## POST /v1/chat/completions, wrong key
+HTTP/1.1 401 Unauthorized
+content-type: text/plain
+content-length: 51
+date: Sat, 24 Oct 2026 16:27:23 GMT
+
+api key authentication failure: invalid credentials
+## kagent placeholder as key
+HTTP/1.1 401 Unauthorized
+content-type: text/plain
+content-length: 51
+date: Sat, 24 Oct 2026 16:27:23 GMT
+
+api key authentication failure: invalid credentials

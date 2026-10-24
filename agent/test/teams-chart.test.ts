@@ -44,6 +44,7 @@ describe("teams chart", () => {
       { group: "api.kagent.dev", kind: "Agent" },
       { group: "api.kagent.dev", kind: "ModelConfig" },
       { group: "api.kagent.dev", kind: "Harness" },
+      { group: "api.kagent.dev", kind: "RemoteMCPServer" },
       { group: "", kind: "ConfigMap" },
     ]);
   });
@@ -85,7 +86,15 @@ describe("teams chart", () => {
     expect(set.spec.template.spec.source.targetRevision).toBe("try/my-agent");
   });
 
-  it("renders the subagent templates, catalog RemoteMCPServers and git and npm EgressPolicies in each team base", () => {
+  it("renders no catalog RemoteMCPServer and no GitHub token reference in the team base", () => {
+    const r = renderTeams({ ...VALUES, images: { coding: `172.18.0.3:5000/hello-agent@sha256:${"b".repeat(64)}`, skills: {} } });
+    expect(r.ok, r.output).toBe(true);
+    // Each agent gets its own servers at agentgateway (the values-file chart); agentgateway holds the token.
+    expect(r.objects.filter((o) => o.kind === "RemoteMCPServer")).toEqual([]);
+    expect(r.output).not.toMatch(/github-mcp-token|github-mcp\.github-mcp\.svc|demo-mcp\.demo-mcp\.svc/);
+  });
+
+  it("renders the subagent templates and git and npm EgressPolicies in each team base", () => {
     const r = renderTeams();
     expect(r.ok, r.output).toBe(true);
     for (const team of ["platform", "payments"]) {
@@ -96,11 +105,6 @@ describe("teams chart", () => {
         expect(template.spec.systemPrompt, `${ns} ${sub}`).toBeTruthy();
         expect(find(r.objects, "ModelConfig", template.spec.modelConfig.name, ns), `${ns} ${sub} model`).toBeDefined();
       }
-      expect(find(r.objects, "RemoteMCPServer", "github-mcp", ns)!.spec.url).toBe("http://github-mcp.github-mcp.svc.cluster.local:8080/");
-      expect(find(r.objects, "RemoteMCPServer", "github-mcp", ns)!.spec.headersFrom).toEqual([
-        { name: "Authorization", valueFrom: { type: "Secret", name: "github-mcp-token", key: "token" } },
-      ]);
-      expect(find(r.objects, "RemoteMCPServer", "demo-mcp", ns)!.spec.url).toBe("http://demo-mcp.demo-mcp.svc.cluster.local:8080/mcp");
       expect(find(r.objects, "EgressPolicy", "git-egress", ns)!.spec.destinations).toEqual([
         { origin: "https://github.com" },
         { origin: "https://codeload.github.com" },

@@ -1,0 +1,14 @@
+can-i list secrets -n team-platform: yes
+can-i create secrets -n team-platform: yes
+can-i delete secrets -n team-platform: yes
+can-i get secrets -n team-platform: no
+can-i list secrets -n kube-system: no
+can-i list secrets -n agentgateway-system: no
+can-i list secrets -A: no
+can-i get configmap/agent-api-keys -n agentgateway-system: yes
+can-i patch configmap/agent-api-keys -n agentgateway-system: yes
+can-i get configmap/other -n agentgateway-system: no
+can-i patch configmap/kagent-config -n kagent: no
+can-i list configmaps -n team-platform: yes
+can-i create configmaps -n team-platform: no
+clusterrolebindings naming the minter: 0

@@ -49,7 +49,9 @@ apiKey.agent == "alice"
   request body`), so a batch cannot carry a call past the argument test.
 - **Duplicate keys in `arguments`** (`{"repo":"evil","repo":"good"}`): the rule and the
   tested server both read the last value. A server that reads the first value would differ.
-  Not tested against github-mcp-server; check it when that ticket wires the rule.
+  github-mcp-server reads the last value too (checked on kind in verify run 56-r1:
+  `push_files` with `"repo":"agent-golden-path","repo":"test-repo"` passed the rule and
+  pushed to `test-repo`; the reverse order was refused).
 - The argument test sees the tool's declared names only (`owner`, `repo`). A tool that
   names the repo another way (a full name, a URL) needs its own rule.
 - Policy changes apply in about two seconds; the script sleeps three.

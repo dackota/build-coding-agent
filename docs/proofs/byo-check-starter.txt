@@ -1,0 +1,13 @@
+platform/byo-check.sh "172.19.0.3:5000/byo-starter@sha256:4934645dd6373236b53b7e4a406053228efe78b8851c5d6dc2ed367f527537c8"
+byo-check: checking 172.19.0.3:5000/byo-starter@sha256:4934645dd6373236b53b7e4a406053228efe78b8851c5d6dc2ed367f527537c8 in namespace byo-check-0638a84c
+PASS  1  A2A over gRPC: a message started a task that ended COMPLETED with the model's reply
+PASS  2  Bind 0.0.0.0:80: port 80 accepts connections on the pod address
+PASS  3  Open the port before /readyz: the gRPC port was open when /readyz first answered
+PASS  4  Task store calls to the control-plane URL with the placeholder bearer: 8 task store calls, all with the placeholder bearer and the identity file's session
+PASS  5  Settle only at real boundaries: settleTask was called once, after the last save
+PASS  6  Read the runtime config: the model call went to the configured base URL with OPENAI_API_KEY as the bearer and the config's instruction
+skip  7  Run subagents and MCP tools itself: not checked: it depends on the tools and subagents your values file lists; test it with your own tool set
+skip  8  Send HITL pauses: not checked: it depends on which tools need approval; test it with a write tool
+skip  9  Honor the egress trust bundle: not checked: the check has no Substrate egress gateway; test it on a deployed agent
+byo-check: PASSED
+make byo-check   1.06s user 0.39s system 8% cpu 17.316 total

@@ -42,6 +42,12 @@ on one. The platform team's own agents are examples: `deployments/platform/hello
 (coding, write tools, all three subagents), `docs-agent` (coding, a skill) and
 `triage-agent` (stock, `github-read`).
 
+Your team's agents share the team's monthly token budget, which the platform sets in
+`platform/budgets.txt`. Past either cap, model calls get HTTP 429 until the month rolls over.
+A team with no budget there gets no keys. A new or changed cap takes effect in a few minutes
+(the minter runs each minute, then the ratelimit service picks up its config).
+`make status` shows each agent's and team's use against its cap.
+
 Check a file before you open the pull request:
 
 ```sh

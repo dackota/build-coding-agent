@@ -44,11 +44,20 @@ describe("agent chart: byo runtime", () => {
     const coding = render(AGENT_CHART, "byo-starter", NS, [valuesFile({ ...BYO, runtime: "coding", image: undefined, command: undefined, tools })]);
     expect(byo.ok, byo.output).toBe(true);
     expect(coding.ok, coding.output).toBe(true);
-    for (const [kind, name] of [["ModelConfig", "byo-starter-model"], ["AgentTemplate", "byo-starter"]] as const) {
+    for (const [kind, name] of [["ModelConfig", "byo-starter-model"], ["AgentTemplate", "byo-starter"], ["RemoteMCPServer", "byo-starter-github-mcp"]] as const) {
       expect(find(byo.objects, kind, name, NS)!.spec, kind).toEqual(find(coding.objects, kind, name, NS)!.spec);
     }
     const registration = find(byo.objects, "ConfigMap", "byo-starter-registration", NS)!;
-    expect(registration.data).toEqual({ team: "platform", agent: "byo-starter", owner: "dackota", runtime: "byo", model: "glm-5.3-flash", tokenCap: "1000000" });
+    expect(registration.data).toEqual({
+      team: "platform",
+      agent: "byo-starter",
+      owner: "dackota",
+      runtime: "byo",
+      model: "glm-5.3-flash",
+      tokenCap: "1000000",
+      mcpTools: '["issue_read","create_branch","push_files","create_pull_request"]',
+      githubRepos: "[]",
+    });
   });
 
   it("the starter's example values file renders", () => {
