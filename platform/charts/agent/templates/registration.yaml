@@ -16,3 +16,5 @@ data:
   runtime: {{ .Values.runtime | quote }}
   model: {{ .Values.model | quote }}
   tokenCap: {{ .Values.tokenCap | int64 | toString | quote }}
+  # The MCP tool names of its catalog tools: the minter's tool policy allows only these.
+  mcpTools: {{ include "agent.mcpToolNames" . | quote }}

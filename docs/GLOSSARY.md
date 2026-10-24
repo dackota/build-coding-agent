@@ -45,7 +45,7 @@ A group that ships agents, named on the team list `platform/teams.txt`. Its agen
 _Avoid_: tenant, org
 
 **Team base**:
-The platform-owned objects in each team namespace that the team's agents resolve: WorkerPool and ServiceAccount `team-default`, `default-model-config`, Harness `kagent-stock`, Harness `coding` (pinned by `make deploy`), the subagent templates `explorer`, `executor` and `reviewer`, the catalog RemoteMCPServers, and the git and npm EgressPolicies. Teams cannot change it.
+The platform-owned objects in each team namespace that the team's agents resolve: WorkerPool and ServiceAccount `team-default`, `default-model-config`, Harness `kagent-stock`, Harness `coding` (pinned by `make deploy`), the subagent templates `explorer`, `executor` and `reviewer`, and the git and npm EgressPolicies. Teams cannot change it. The catalog RemoteMCPServers are not in it: each agent gets its own, keyed by its agent key.
 _Avoid_: team defaults, shared config
 
 **Values file**:
@@ -61,7 +61,7 @@ A monthly limit on model tokens, enforced at agentgateway through Envoy's `ratel
 _Avoid_: quota, spend limit
 
 **Minter**:
-The platform's CronJob in `platform-system` (`agent/src/minter/`) that runs every minute, reads the registrations of every listed team, and gives each agent its own agent key and token cap; it removes the key and cap of an agent whose registration is gone. Its pure core is `plan()`.
+The platform's CronJob in `platform-system` (`agent/src/minter/`) that runs every minute, reads the registrations of every listed team, and gives each agent its own agent key, token cap and MCP tool policy at agentgateway; it removes all three when the agent's registration is gone. Its pure core is `plan()`.
 _Avoid_: key operator, provisioner
 
 **Agent key**:

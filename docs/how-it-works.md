@@ -19,7 +19,7 @@ you ── make chat ──> kagent controller ──> Substrate actor ──> a
 | **Agent Substrate** | Runs each session as an **actor**: a sandboxed process (gVisor) that is frozen to a snapshot when idle and restored on the next message. | Each session gets its own isolated machine. Idle sessions cost nothing. |
 | **agentgateway** | A proxy in front of the model provider (the OpenCode Go plan). Holds the model key. | The agent and kagent never see the key. |
 | **The agent** (`agent/`) | Our code. A Node 24 TypeScript program that kagent runs as a `byo` image. It speaks A2A over gRPC. | This is the part the course teaches us to build. |
-| **GitHub MCP server** | GitHub's own MCP server. Substrate's egress gateway adds the token from a Secret (`headersFrom` on its RemoteMCPServer) as each request leaves the actor. | The agent can push and open PRs without ever holding the token. |
+| **GitHub MCP server** | GitHub's own MCP server, behind agentgateway's `/mcp/github`. The gateway's GitHub backend adds the token; the agent sends only its own key, and sees only its own tools. | The agent can push and open PRs without ever holding the token. |
 | **Local registry** | `registry:2` on `localhost:5001`. | `make deploy` pushes the agent image here and names it by digest. |
 
 ## What happens when you send a message
@@ -73,10 +73,14 @@ nesting is one level deep.
   The tool checks the gate again when it runs, so an unapproved call never runs.
 - **No credentials in the actor.** The provider key is in agentgateway. Each agent's own key
   (the minter's, Secret `<agent>-agent-key`) is added by Substrate's egress gateway as a model
-  call leaves the actor; the gateway's `/v1` refuses a call without one. The GitHub token is in
-  Secret `github-mcp-token` in the agent's team namespace (`team-platform` for
-  `hello-agent`), which only Substrate's egress gateway reads. The agent's config and env hold
-  a placeholder, and its logs hold neither.
+  call leaves the actor; the gateway's `/v1` refuses a call without one. The same key goes, in
+  header `x-agent-key`, on the agent's MCP calls to agentgateway's `/mcp/github` and
+  `/mcp/demo`. The GitHub token is in Secret `github-mcp-token` in `agentgateway-system`, and
+  only the gateway's GitHub backend sends it; no team namespace and no actor holds it. The
+  agent's config and env hold a placeholder, and its logs hold neither.
+- **Tool allow list at the gateway.** The minter writes one agentgateway policy per agent,
+  `mcp-tools.<team>.<agent>`, that allows only the MCP tools of its catalog tools. Any other
+  tool is missing from `tools/list` and answers `Unknown tool`, also to `curl` from `bash`.
 - **Narrow egress.** The actor can reach only `github.com`, `codeload.github.com` and
   `registry.npmjs.org` (the team base's `git-egress` and `npm-egress`). So `git clone` works
   for public repos only.

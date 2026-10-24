@@ -46,9 +46,11 @@ describe("minter deployment", () => {
       expect(binding.subjects).toEqual([{ kind: "ServiceAccount", name: "minter", namespace: MINTER_NS }]);
     }
 
+    // The API-key and ratelimit ConfigMaps by name, and the agents' MCP tool policies (create cannot be limited by name).
     expect(rulesIn(r.objects, "agentgateway-system")).toEqual([
       { apiGroups: [""], resources: ["configmaps"], resourceNames: ["agent-api-keys"], verbs: ["get", "patch"] },
       { apiGroups: [""], resources: ["configmaps"], resourceNames: ["ratelimit-config"], verbs: ["get", "patch"] },
+      { apiGroups: ["agentgateway.dev"], resources: ["agentgatewaypolicies"], verbs: ["list", "create", "patch", "delete"] },
     ]);
     for (const rule of r.objects.filter((o) => o.kind === "Role").flatMap((o) => o.rules)) {
       expect(rule.verbs).not.toContain("*");
@@ -79,6 +81,8 @@ describe("minter deployment", () => {
         { name: "MINTER_TEAMS", value: "platform,payments" },
         { name: "MINTER_API_KEYS_NAMESPACE", value: "agentgateway-system" },
         { name: "MINTER_API_KEYS_CONFIGMAP", value: "agent-api-keys" },
+        { name: "MINTER_MCP_POLICY_NAMESPACE", value: "agentgateway-system" },
+        { name: "MINTER_MCP_BACKENDS", value: "github-mcp,demo-mcp" },
         { name: "MINTER_RATELIMIT_NAMESPACE", value: "agentgateway-system" },
         { name: "MINTER_RATELIMIT_CONFIGMAP", value: "ratelimit-config" },
         { name: "MINTER_BUDGETS_FILE", value: "/budgets/budgets.json" },

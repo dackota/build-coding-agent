@@ -24,7 +24,7 @@ describe("triage-agent values file", () => {
   });
 
   it("binds only github-mcp issue_read, with no other tool and no approval", () => {
-    expect(rendered("AgentTemplate").spec.tools).toEqual([{ mcp: { server: { kind: "RemoteMCPServer", name: "github-mcp" }, tools: ["issue_read"] } }]);
+    expect(rendered("AgentTemplate").spec.tools).toEqual([{ mcp: { server: { kind: "RemoteMCPServer", name: "triage-agent-github-mcp" }, tools: ["issue_read"] } }]);
   });
 
   it("holds no token, env, or headers, and no egress", () => {

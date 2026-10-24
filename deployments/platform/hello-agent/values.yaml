@@ -21,8 +21,10 @@ systemPrompt: |
   workspace first, path relative to the repo root), then create_pull_request with that branch
   as head. The user approves each of these calls.
 # Each call of a write tool pauses for the user's approval. The implement loop reads issues
-# through github-write's server from code (agent/src/loop-github.ts).
+# with issue_read from code (agent/src/loop-github.ts), so github-read is here too: the
+# minter's tool policy for this agent allows only the tools listed here.
 tools:
+  - github-read
   - github-write
   - demo-delete-branch
 subagents: [explorer, executor, reviewer]

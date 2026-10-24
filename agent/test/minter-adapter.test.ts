@@ -6,9 +6,23 @@ import { type MinterConfig, readState, runOnce } from "../src/minter/adapter.ts"
 import { type Change, plan } from "../src/minter/plan.ts";
 import { FakeKube, type Write } from "./fake-kube.ts";
 
-const CONFIG: MinterConfig = { teams: ["platform", "payments"], apiKeys: { namespace: "agentgateway-system", name: "agent-api-keys" } };
+const CONFIG: MinterConfig = {
+  teams: ["platform", "payments"],
+  apiKeys: { namespace: "agentgateway-system", name: "agent-api-keys" },
+  mcp: { namespace: "agentgateway-system", backends: ["github-mcp", "demo-mcp"] },
+};
 const REGISTRATION = { "agents.build-coding-agent.dev/registration": "true" };
 const KEY_LABELS = (agent: string) => ({ "app.kubernetes.io/managed-by": "minter", "agents.build-coding-agent.dev/agent-key": "true", "agents.build-coding-agent.dev/agent": agent });
+const POLICY_LABELS = (team: string, agent: string) => ({
+  "app.kubernetes.io/managed-by": "minter",
+  "agents.build-coding-agent.dev/mcp-tools": "true",
+  "agents.build-coding-agent.dev/team": team,
+  "agents.build-coding-agent.dev/agent": agent,
+});
+const TARGETS = [
+  { group: "agentgateway.dev", kind: "AgentgatewayBackend", name: "github-mcp" },
+  { group: "agentgateway.dev", kind: "AgentgatewayBackend", name: "demo-mcp" },
+];
 const sha = (text: string) => `sha256:${createHash("sha256").update(text).digest("hex")}`;
 
 function keyMaker(): () => string {
@@ -16,8 +30,8 @@ function keyMaker(): () => string {
   return () => `fake-key-${++n}`;
 }
 
-function register(kube: FakeKube, team: string, agent: string, dataTeam = team): void {
-  kube.seedConfigMap(`team-${team}`, `${agent}-registration`, REGISTRATION, { team: dataTeam, agent, owner: "o", runtime: "stock", model: "glm-5.3-flash", tokenCap: "1000" });
+function register(kube: FakeKube, team: string, agent: string, dataTeam = team, mcpTools = '["issue_read"]'): void {
+  kube.seedConfigMap(`team-${team}`, `${agent}-registration`, REGISTRATION, { team: dataTeam, agent, owner: "o", runtime: "stock", model: "glm-5.3-flash", tokenCap: "1000", mcpTools });
 }
 
 function cluster(): FakeKube {
@@ -33,6 +47,8 @@ function expectedWrites(changes: readonly Change[]): Write[] {
   for (const c of changes) {
     if (c.kind === "put-secret") secretWrites.push({ op: "put-secret", namespace: c.namespace, name: c.name });
     if (c.kind === "delete-secret") secretWrites.push({ op: "delete-secret", namespace: c.namespace, name: c.name });
+    if (c.kind === "put-policy") secretWrites.push({ op: "put-policy", namespace: "agentgateway-system", name: c.name });
+    if (c.kind === "delete-policy") secretWrites.push({ op: "delete-policy", namespace: "agentgateway-system", name: c.name });
     if (c.kind === "set-hash") patch[c.entry] = JSON.stringify({ keyHash: c.keyHash, metadata: { team: c.team, agent: c.agent } });
     if (c.kind === "delete-hash") patch[c.entry] = null;
   }
@@ -70,16 +86,56 @@ describe("minter adapter", () => {
     }
   });
 
-  it("deletes the Secret and hash of a removed registration", async () => {
+  it("deletes the Secret, hash and tool policy of a removed registration", async () => {
     const kube = cluster();
     register(kube, "platform", "hello-agent");
     await runOnce(kube, CONFIG, keyMaker());
+    expect(kube.policy("agentgateway-system", "mcp-tools.platform.hello-agent")).toBeDefined();
     kube.configMaps.delete("team-platform/hello-agent-registration");
 
     await runOnce(kube, CONFIG, keyMaker());
 
     expect(kube.secret("team-platform", "hello-agent-agent-key")).toBeUndefined();
     expect(kube.configMap("agentgateway-system", "agent-api-keys")!.data).toEqual({});
+    expect(kube.policy("agentgateway-system", "mcp-tools.platform.hello-agent")).toBeUndefined();
+  });
+
+  it("writes one MCP tool policy per registration, naming its team, agent and tools", async () => {
+    const kube = cluster();
+    register(kube, "platform", "hello-agent", "platform", '["create_branch","push_files","create_pull_request","delete_branch"]');
+    register(kube, "payments", "pay-bot", "payments", '["issue_read"]');
+    register(kube, "payments", "quiet", "payments", "not json");
+
+    await runOnce(kube, CONFIG, keyMaker());
+
+    expect(kube.policy("agentgateway-system", "mcp-tools.platform.hello-agent")).toEqual({
+      name: "mcp-tools.platform.hello-agent",
+      labels: POLICY_LABELS("platform", "hello-agent"),
+      targetRefs: TARGETS,
+      matchExpressions: ['apiKey.team == "platform" && apiKey.agent == "hello-agent" && mcp.tool.name in ["create_branch", "create_pull_request", "delete_branch", "push_files"]'],
+    });
+    expect(kube.policy("agentgateway-system", "mcp-tools.payments.pay-bot")!.matchExpressions).toEqual([
+      'apiKey.team == "payments" && apiKey.agent == "pay-bot" && mcp.tool.name in ["issue_read"]',
+    ]);
+    // A registration whose tool list cannot be read gets a policy that allows nothing.
+    expect(kube.policy("agentgateway-system", "mcp-tools.payments.quiet")!.matchExpressions).toEqual(['apiKey.team == "payments" && apiKey.agent == "quiet" && mcp.tool.name in []']);
+  });
+
+  it("rewrites a minter policy someone changed by hand, and leaves policies it does not own alone", async () => {
+    const kube = cluster();
+    register(kube, "platform", "hello-agent");
+    await runOnce(kube, CONFIG, keyMaker());
+    kube.seedPolicy("agentgateway-system", { name: "mcp-tools.platform.hello-agent", labels: POLICY_LABELS("platform", "hello-agent"), targetRefs: TARGETS, matchExpressions: ["true"] });
+    kube.seedPolicy("agentgateway-system", { name: "mcp-deny-floor", labels: {}, targetRefs: TARGETS, matchExpressions: ["false"] });
+    kube.writes.length = 0;
+
+    await runOnce(kube, CONFIG, keyMaker());
+
+    expect(kube.writes).toEqual([{ op: "put-policy", namespace: "agentgateway-system", name: "mcp-tools.platform.hello-agent" }]);
+    expect(kube.policy("agentgateway-system", "mcp-tools.platform.hello-agent")!.matchExpressions).toEqual([
+      'apiKey.team == "platform" && apiKey.agent == "hello-agent" && mcp.tool.name in ["issue_read"]',
+    ]);
+    expect(kube.policy("agentgateway-system", "mcp-deny-floor")).toBeDefined();
   });
 
   it("a second run changes nothing", async () => {
@@ -110,7 +166,7 @@ describe("minter adapter", () => {
     kube.seedConfigMap("kube-system", "evil-registration", REGISTRATION, { team: "platform", agent: "evil" });
 
     const state = await readState(kube, CONFIG);
-    expect(state.registrations).toEqual([{ team: "platform", agent: "hello-agent", tokenCap: 1000 }]);
+    expect(state.registrations).toEqual([{ team: "platform", agent: "hello-agent", tools: ["issue_read"], tokenCap: 1000 }]);
   });
 });
 

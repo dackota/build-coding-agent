@@ -1,6 +1,6 @@
 // The minter's CronJob entrypoint (platform/charts/teams/templates/minter.yaml): one run that
-// gives every registered agent of a listed team its own model key and removes the keys of
-// agents that are gone. It logs one JSON line per change, never a key, and exits non-zero on
+// gives every registered agent of a listed team its own model key and MCP tool policy, and
+// removes the keys and policies of agents that are gone. It logs one JSON line per change, never a key, and exits non-zero on
 // any failure; the next run (a minute later) converges from wherever this one stopped.
 import { readFileSync } from "node:fs";
 import { runOnce, type MinterConfig } from "./adapter.ts";
@@ -36,7 +36,10 @@ function configFromEnv(env: NodeJS.ProcessEnv): MinterConfig {
   const namespace = env.MINTER_API_KEYS_NAMESPACE ?? "";
   const name = env.MINTER_API_KEYS_CONFIGMAP ?? "";
   if (namespace === "" || name === "") throw new Error("MINTER_API_KEYS_NAMESPACE and MINTER_API_KEYS_CONFIGMAP must name agentgateway's API-key ConfigMap");
-  return { teams, apiKeys: { namespace, name }, ...capsFromEnv(env) };
+  const policyNamespace = env.MINTER_MCP_POLICY_NAMESPACE ?? "";
+  const backends = (env.MINTER_MCP_BACKENDS ?? "").split(",").filter((b) => b !== "");
+  if (policyNamespace === "" || backends.length === 0) throw new Error("MINTER_MCP_POLICY_NAMESPACE and MINTER_MCP_BACKENDS must name agentgateway's namespace and its catalog MCP backends");
+  return { teams, apiKeys: { namespace, name }, mcp: { namespace: policyNamespace, backends }, ...capsFromEnv(env) };
 }
 
 try {

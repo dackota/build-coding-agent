@@ -3,8 +3,8 @@
 # them to the local registry, read their sha256 digests from the registry, and pin them in
 # the teams release: every team base's Harness coding runs the image by digest, and every
 # Application gets the skill images. Argo CD deploys the agents themselves from
-# deployments/<team>/<agent>/. Also runs the GitHub and demo MCP servers and makes each
-# team's GitHub token Secret. Usage: deploy.sh (run make up first). The agent holds no key.
+# deployments/<team>/<agent>/. Also runs the GitHub and demo MCP servers and makes the GitHub
+# token Secret agentgateway holds. Usage: deploy.sh (run make up first). The agent holds no key.
 set -euo pipefail
 # shellcheck source=platform/lib.sh
 . "$(dirname "$0")/lib.sh"
@@ -20,22 +20,23 @@ MANIFEST_TYPES="application/vnd.oci.image.index.v1+json,application/vnd.docker.d
 GITHUB_TOKEN_NAME="GITHUB_TOKEN"
 GITHUB_TOKEN_SECRET="github-mcp-token"
 
-# Secret github-mcp-token in each team namespace from GITHUB_TOKEN in .env, value
-# "Bearer <token>": the Authorization header the team base's RemoteMCPServer github-mcp takes
-# with headersFrom, which Substrate's egress gateway adds to the agent's requests. Delete and
-# create, not apply (apply would copy the token into an annotation); the token reaches
-# kubectl on stdin from printf (a builtin), so it is in no process's argv.
-make_github_token_secrets() {
-  local token team teams ns
+# Secret github-mcp-token in agentgateway-system from GITHUB_TOKEN in .env: the GitHub MCP
+# backend's auth (platform/gateway.yaml) sends it to github-mcp-server as
+# "Authorization: Bearer <token>". No team namespace and no actor holds it; the copy a cluster
+# built before this move kept in each team namespace is deleted. Delete and create, not apply
+# (apply would copy the token into an annotation); the token reaches kubectl on stdin from
+# printf (a builtin), so it is in no process's argv.
+make_github_token_secret() {
+  local token team teams
   token="$(read_env_value "$GITHUB_TOKEN_NAME")"
   [ -n "$token" ] || fail "$GITHUB_TOKEN_NAME is missing or empty in $ENV_FILE (git out needs it; see .env.example)"
+  k delete secret "$GITHUB_TOKEN_SECRET" -n "$AGW_NS" --ignore-not-found >/dev/null
+  printf '%s' "$token" | k create secret generic "$GITHUB_TOKEN_SECRET" -n "$AGW_NS" \
+    --from-file=Authorization=/dev/stdin >/dev/null
+  echo "Secret $AGW_NS/$GITHUB_TOKEN_SECRET made from $GITHUB_TOKEN_NAME"
   teams="$("$TEAMS_SH" names)"
   for team in $teams; do
-    ns="team-$team"
-    k delete secret "$GITHUB_TOKEN_SECRET" -n "$ns" --ignore-not-found >/dev/null
-    printf 'Bearer %s' "$token" | k create secret generic "$GITHUB_TOKEN_SECRET" -n "$ns" \
-      --from-file=token=/dev/stdin >/dev/null
-    echo "Secret $ns/$GITHUB_TOKEN_SECRET made from $GITHUB_TOKEN_NAME"
+    k delete secret "$GITHUB_TOKEN_SECRET" -n "team-$team" --ignore-not-found >/dev/null
   done
 }
 
@@ -95,7 +96,7 @@ wait_for_agent() {
   echo "ok   Agent $ns/$agent is ready"
 }
 
-make_github_token_secrets
+make_github_token_secret
 
 tag="build-$(date +%s)"
 docker build -q -t "localhost:$REGISTRY_PORT/$REPO:$tag" "$ROOT/agent" >/dev/null

@@ -13,14 +13,57 @@ folder's name.
 {{- end -}}
 
 {{/*
-The tool catalog: a catalog name is a server in the team base (a RemoteMCPServer), its
-tools, and whether it writes. A write tool always pauses for approval (the schema refuses
-requireApproval: false on one; this forces it on when unset).
+The tool catalog: a catalog name is a catalog MCP server, its tools, and whether it writes.
+A write tool always pauses for approval (the schema refuses requireApproval: false on one;
+this forces it on when unset). Each server sits behind agentgateway at its route
+(platform/gateway.yaml); the agent reaches it through its own RemoteMCPServer
+(mcp-servers.yaml), and the minter's tool policy for the agent allows only its tools there.
 */}}
 {{- define "agent.catalog" -}}
 github-read: {server: github-mcp, tools: [issue_read], write: false}
 github-write: {server: github-mcp, tools: [create_branch, push_files, create_pull_request], write: true}
 demo-delete-branch: {server: demo-mcp, tools: [delete_branch], write: true}
+{{- end -}}
+
+{{/* The catalog MCP servers: agentgateway's route for each, and what it is. */}}
+{{- define "agent.mcpServers" -}}
+github-mcp: {path: /mcp/github, description: "GitHub through agentgateway, which holds the token"}
+demo-mcp: {path: /mcp/demo, description: "Demo MCP server with one destructive-looking tool, for the requireApproval check"}
+{{- end -}}
+
+{{/* The agent's own RemoteMCPServer for a catalog server: <agent>-<server>. */}}
+{{- define "agent.mcpServerName" -}}
+{{- printf "%s-%s" .agent .server -}}
+{{- end -}}
+
+{{/* The catalog entries of the agent's tools, in order, as a JSON list (an unknown name fails in agent.tools). */}}
+{{- define "agent.toolEntries" -}}
+{{- $catalog := include "agent.catalog" . | fromYaml -}}
+{{- $entries := list -}}
+{{- range .Values.tools }}
+{{- $name := . }}
+{{- if kindIs "map" . }}{{ $name = .name }}{{ end }}
+{{- $entries = append $entries (get $catalog $name | default dict) }}
+{{- end }}
+{{- $entries | toJson -}}
+{{- end -}}
+
+{{/* The catalog servers the agent's tools use, each once, as a JSON list. */}}
+{{- define "agent.usedServers" -}}
+{{- $servers := list -}}
+{{- range include "agent.toolEntries" . | fromJsonArray }}
+{{- $servers = append $servers .server }}
+{{- end }}
+{{- $servers | uniq | toJson -}}
+{{- end -}}
+
+{{/* The MCP tool names of the agent's catalog tools, as a JSON list: the registration gives them to the minter. */}}
+{{- define "agent.mcpToolNames" -}}
+{{- $names := list -}}
+{{- range include "agent.toolEntries" . | fromJsonArray }}
+{{- $names = concat $names .tools }}
+{{- end }}
+{{- $names | uniq | toJson -}}
 {{- end -}}
 
 {{/* The team base's subagent templates, by subagent name. */}}
@@ -44,7 +87,7 @@ reviewer: {template: reviewer-template, description: Read-only reviewer that che
 {{- $entry := get $catalog $name }}
 {{- if not $entry }}{{ fail (printf "tool %s is not in the catalog" $name) }}{{ end }}
 - mcp:
-    server: {kind: RemoteMCPServer, name: {{ $entry.server }}}
+    server: {kind: RemoteMCPServer, name: {{ include "agent.mcpServerName" (dict "agent" $.Values.name "server" $entry.server) }}}
     tools: {{ $entry.tools | toJson }}
     {{- if or $entry.write $approval }}
     requireApproval: true
