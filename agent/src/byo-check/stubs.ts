@@ -13,13 +13,25 @@ const WAITING = new Set([6, 8]);
 // The fields of the task store requests the stub reads.
 type StoreRequest = { sessionId?: string; task: Task; expectedVersion?: number; taskId?: string; version?: number };
 
-export type ControllerStub = { calls: ControllerCall[]; refusedSettles: () => number; close: () => Promise<void> };
+export type StoredTask = { task: Task; version: number };
+export type StubCall = ControllerCall & { request: Record<string, unknown> };
+export type ControllerStub = {
+  port: number;
+  calls: StubCall[];
+  tasks: Map<string, StoredTask>;
+  /** Versions the real controller treats as boundaries: terminal, or a move into a waiting state. */
+  boundaries: Set<string>;
+  settled: { taskId: string; version: number }[];
+  refusedSettles: () => number;
+  close: () => Promise<void>;
+};
 export type ModelStub = { requests: ModelRequest[]; close: () => Promise<void> };
 
-/** Serves TaskStoreService on host:port. It keeps what the real controller enforces. */
+/** Serves TaskStoreService on host:port (port 0: any free port, read back from the stub). It keeps what the real controller enforces. */
 export async function startControllerStub(host: string, port: number, sessionId: string): Promise<ControllerStub> {
-  const calls: ControllerCall[] = [];
-  const tasks = new Map<string, { task: Task; version: number }>();
+  const calls: StubCall[] = [];
+  const tasks = new Map<string, StoredTask>();
+  const settled: { taskId: string; version: number }[] = [];
   const boundaries = new Set<string>();
   let refusedSettles = 0;
   const definition: Record<string, grpc.MethodDefinition<unknown, unknown>> = {};
@@ -37,7 +49,7 @@ export async function startControllerStub(host: string, port: number, sessionId:
     handlers[name] = (call: grpc.ServerUnaryCall<StoreRequest, unknown>, cb: grpc.sendUnaryData<unknown>) => {
       const authorization = call.metadata.get("authorization")[0]?.toString();
       const req = call.request;
-      calls.push({ method: name, authorization, sessionId: req.sessionId });
+      calls.push({ method: name, authorization, sessionId: req.sessionId, request: { ...req } });
       if (authorization !== PLACEHOLDER_BEARER) return cb({ code: grpc.status.PERMISSION_DENIED, details: "runtime actor identity is required" });
       if (req.sessionId !== sessionId) return cb({ code: grpc.status.PERMISSION_DENIED, details: "actor does not belong to this session" });
       switch (name) {
@@ -72,6 +84,7 @@ export async function startControllerStub(host: string, port: number, sessionId:
             refusedSettles += 1;
             return cb({ code: grpc.status.ABORTED, details: "task changed or the session cannot accept this update" });
           }
+          settled.push({ taskId: req.taskId ?? "", version: req.version ?? 0 });
           return cb(null, {});
         default:
           return cb({ code: grpc.status.UNIMPLEMENTED, details: name });
@@ -80,10 +93,10 @@ export async function startControllerStub(host: string, port: number, sessionId:
   }
   const server = new grpc.Server();
   server.addService(definition, handlers);
-  await new Promise<void>((resolve, reject) =>
-    server.bindAsync(`${host}:${port}`, grpc.ServerCredentials.createInsecure(), (err) => (err ? reject(err) : resolve())),
+  const boundPort = await new Promise<number>((resolve, reject) =>
+    server.bindAsync(`${host}:${port}`, grpc.ServerCredentials.createInsecure(), (err, p) => (err ? reject(err) : resolve(p))),
   );
-  return { calls, refusedSettles: () => refusedSettles, close: () => new Promise((r) => server.tryShutdown(() => r())) };
+  return { port: boundPort, calls, tasks, boundaries, settled, refusedSettles: () => refusedSettles, close: () => new Promise((r) => server.tryShutdown(() => r())) };
 }
 
 /** Serves POST /v1/chat/completions (streaming or not) with a fixed text reply. */
