@@ -6,7 +6,9 @@ config:
     grpcReflection: true
 # The chart's default ModelConfig (default-model-config) goes to the model through
 # agentgateway only. agentgateway holds the OpenCode Go key; the kagent-openai Secret
-# holds a placeholder that the gateway ignores. kagent needs the /v1 suffix.
+# holds a placeholder. kagent needs the /v1 suffix. The /v1 route takes only an agent key
+# (platform/gateway.yaml), so an agent in this namespace on this config gets 401: agents
+# live in team namespaces, each with its own ModelConfig and key.
 providers:
   default: openAI
   openAI:

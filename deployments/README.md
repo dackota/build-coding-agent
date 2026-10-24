@@ -2,22 +2,27 @@
 
 One folder per agent: `deployments/<team>/<agent>/values.yaml`. Argo CD watches this
 folder on `main`. Merge a folder and the agent deploys into namespace `team-<team>`;
-delete the folder and Argo CD removes it. Nobody applies anything by hand.
+delete the folder and Argo CD removes it. Nobody applies anything by hand. Within about a
+minute of the agent's registration appearing, the platform's minter gives it its own model
+key (Secret `<agent>-agent-key`, which no one needs to read); deleting the folder removes
+the key too.
 
 The team must be on the team list, `platform/teams.txt`. The values file must match the
 schema in `platform/charts/agent/values.schema.json`, which rejects unknown fields. The
 folder's name must be the agent's `name`, and its parent folder the agent's `team`.
 
-Two runtimes deploy today: `stock` (kagent's built-in runtime: a prompt, catalog tools and
+Three runtimes deploy today: `stock` (kagent's built-in runtime: a prompt, catalog tools and
 subagents) and `coding` (the platform's coding agent from `agent/`: file tools, `bash` with
-approvals, subagents, skills, and `/implement`; it also reaches GitHub and npm). `byo` comes later.
+approvals, subagents, skills, and `/implement`; it also reaches GitHub and npm). `byo` runs your own image: set `image` (pinned by digest, from the allowed registry) and
+`command`; the image must meet the rules in
+[docs/byo-contract.md](../docs/byo-contract.md), and `make byo-push` prints the `image` line.
 
 ```yaml
 name: my-agent
 team: platform
 owner: your-github-handle
 description: Answers questions briefly
-runtime: coding           # or stock
+runtime: coding           # or stock, or byo (see above)
 model: glm-5.3-flash      # a platform model name
 systemPrompt: You are a concise coding agent. Reply briefly.
 tokenCap: 1000000         # monthly tokens, at most 50000000

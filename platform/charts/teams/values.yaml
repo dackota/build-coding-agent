@@ -6,6 +6,11 @@ workerImage: ""
 images:
   coding: ""
   skills: {}
+# install.sh sets these: the node image the minter runs on (platform/versions.env NODE_IMAGE)
+# and its source, file name (no .ts) to text, from agent/src/minter/.
+minter:
+  image: ""
+  source: {}
 argocdNamespace: argocd
 gitops:
   repoURL: https://github.com/dackota/build-coding-agent.git

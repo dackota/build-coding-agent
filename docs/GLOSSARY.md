@@ -5,7 +5,7 @@ The words this repo uses, and the words to avoid for each.
 ## Platform
 
 **byo agent**:
-A kagent agent that runs our own image ("bring your own") instead of kagent's built-in runtime. Ours is in `agent/`.
+An agent that runs an image the team brings ("bring your own") instead of kagent's built-in runtime: `runtime: byo` in a values file, with the image pinned by digest. It must follow [the byo contract](byo-contract.md); start from `templates/byo-ts`. The platform's own coding agent (`agent/`) is also a byo image of this kind.
 _Avoid_: custom agent, BYO harness
 
 **Harness**:
@@ -55,6 +55,14 @@ _Avoid_: agent YAML, manifest
 **Registration**:
 The ConfigMap `<agent>-registration` the values-file chart renders next to the agent: team, agent, owner, model, and token cap, for the platform to read.
 _Avoid_: agent record
+
+**Minter**:
+The platform's CronJob in `platform-system` (`agent/src/minter/`) that runs every minute, reads the registrations of every listed team, and gives each agent its own agent key; it removes the key of an agent whose registration is gone. Its pure core is `plan()`.
+_Avoid_: key operator, provisioner
+
+**Agent key**:
+One agent's random model key: the key in Secret `<agent>-agent-key` in its team namespace, which its ModelConfig `<agent>-model` names, and the key's hash with `team` and `agent` metadata in agentgateway's ConfigMap `agent-api-keys`. The model route takes no other key. The actor holds only kagent's placeholder.
+_Avoid_: API token, team key
 
 ## Extensibility
 

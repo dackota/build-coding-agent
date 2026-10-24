@@ -1,6 +1,6 @@
 {{/*
 Guards the schema cannot express: the agent lands in its own team's namespace under its
-folder's name, and only the runtimes this release renders.
+folder's name.
 */}}
 {{- define "agent.check" -}}
 {{- $ns := printf "team-%s" .Values.team -}}
@@ -9,9 +9,6 @@ folder's name, and only the runtimes this release renders.
 {{- end -}}
 {{- if ne .Release.Name .Values.name -}}
 {{- fail (printf "name %s must match its folder name %s" .Values.name .Release.Name) -}}
-{{- end -}}
-{{- if eq .Values.runtime "byo" -}}
-{{- fail (printf "runtime %s is not supported yet; use stock or coding" .Values.runtime) -}}
 {{- end -}}
 {{- end -}}
 
@@ -73,10 +70,12 @@ reviewer: {template: reviewer-template, description: Read-only reviewer that che
 {{- end }}
 {{- end -}}
 
-{{/* The team base's ModelConfig for each platform model name. */}}
+{{/* The agent's own ModelConfig, and the key Secret the platform's minter writes for it. */}}
 {{- define "agent.modelConfig" -}}
-{{- $configs := dict "glm-5.3-flash" "default-model-config" -}}
-{{- get $configs .Values.model -}}
+{{- printf "%s-model" .Values.name -}}
+{{- end -}}
+{{- define "agent.keySecret" -}}
+{{- printf "%s-agent-key" .Values.name -}}
 {{- end -}}
 
 {{- define "agent.labels" -}}

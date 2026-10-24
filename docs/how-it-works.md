@@ -71,7 +71,9 @@ nesting is one level deep.
 
 - **Approval gate.** Risky `bash` commands and every bound MCP tool pause until you approve.
   The tool checks the gate again when it runs, so an unapproved call never runs.
-- **No credentials in the actor.** The model key is in agentgateway. The GitHub token is in
+- **No credentials in the actor.** The provider key is in agentgateway. Each agent's own key
+  (the minter's, Secret `<agent>-agent-key`) is added by Substrate's egress gateway as a model
+  call leaves the actor; the gateway's `/v1` refuses a call without one. The GitHub token is in
   Secret `github-mcp-token` in the agent's team namespace (`team-platform` for
   `hello-agent`), which only Substrate's egress gateway reads. The agent's config and env hold
   a placeholder, and its logs hold neither.

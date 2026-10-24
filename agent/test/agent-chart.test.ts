@@ -26,13 +26,13 @@ describe("agent chart: stock runtime", () => {
   it("renders the AgentTemplate, Agent and registration ConfigMap for a stock values file", () => {
     const r = renderValues(STOCK);
     expect(r.ok, r.output).toBe(true);
-    expect(r.objects.map((o) => `${o.kind}/${o.metadata.name}`).sort()).toEqual(["Agent/tracer", "AgentTemplate/tracer", "ConfigMap/tracer-registration"]);
+    expect(r.objects.map((o) => `${o.kind}/${o.metadata.name}`).sort()).toEqual(["Agent/tracer", "AgentTemplate/tracer", "ConfigMap/tracer-registration", "ModelConfig/tracer-model"]);
 
     const template = find(r.objects, "AgentTemplate", "tracer", NS)!;
     expect(template.apiVersion).toBe("api.kagent.dev/v1alpha3");
     expect(template.spec).toEqual({
       description: "A stock agent that answers briefly",
-      modelConfig: { name: "default-model-config" },
+      modelConfig: { name: "tracer-model" },
       systemPrompt: "You are a concise, helpful assistant. Reply briefly.",
     });
 
@@ -45,16 +45,26 @@ describe("agent chart: stock runtime", () => {
     expect(registration.data).toEqual({ team: "platform", agent: "tracer", owner: "dackota", runtime: "stock", model: "glm-5.3-flash", tokenCap: "1000000" });
   });
 
+  it("renders the agent's own ModelConfig naming its key Secret", () => {
+    const r = renderValues(STOCK);
+    expect(r.ok, r.output).toBe(true);
+    const model = find(r.objects, "ModelConfig", "tracer-model", NS)!;
+    expect(model.apiVersion).toBe("api.kagent.dev/v1alpha3");
+    // The minter writes Secret tracer-agent-key; the actor gets only kagent's placeholder.
+    expect(model.spec).toEqual({
+      provider: "OpenAI",
+      model: "glm-5.3-flash",
+      apiKeySecret: "tracer-agent-key",
+      apiKeySecretKey: "OPENAI_API_KEY",
+      stream: true,
+      openAI: { apiFormat: "chatCompletions", baseUrl: "http://agentgateway-proxy.agentgateway-system.svc.cluster.local/v1" },
+    });
+  });
+
   it("rejects a runtime outside the enum", () => {
     const r = renderValues({ ...STOCK, runtime: "python" });
     expect(r.ok).toBe(false);
     expect(r.output).toMatch(/runtime/);
-  });
-
-  it("refuses to render byo in this release", () => {
-    const r = renderValues({ ...STOCK, runtime: "byo" });
-    expect(r.ok).toBe(false);
-    expect(r.output).toMatch(/runtime byo is not supported yet/);
   });
 
   it("refuses a values file whose team is not the namespace's team", () => {
@@ -129,7 +139,7 @@ describe("agent chart: coding runtime", () => {
   it("renders a coding agent on the team base's coding Harness with git and npm egress", () => {
     const r = renderValues(CODING);
     expect(r.ok, r.output).toBe(true);
-    expect(r.objects.map((o) => `${o.kind}/${o.metadata.name}`).sort()).toEqual(["Agent/tracer", "AgentTemplate/tracer", "ConfigMap/tracer-registration"]);
+    expect(r.objects.map((o) => `${o.kind}/${o.metadata.name}`).sort()).toEqual(["Agent/tracer", "AgentTemplate/tracer", "ConfigMap/tracer-registration", "ModelConfig/tracer-model"]);
     const agent = find(r.objects, "Agent", "tracer", NS)!;
     expect(agent.spec).toEqual({
       template: { ref: { name: "tracer" } },
