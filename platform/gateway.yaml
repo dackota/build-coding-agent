@@ -64,8 +64,10 @@ metadata:
   labels: {agents.build-coding-agent.dev/api-keys: "true"}
 ---
 # The model route wants an agent key: a call with no key, or one not in agent-api-keys, gets
-# 401. agentgateway reads "Authorization: Bearer <key>"; the opencode-go backend then puts the
-# provider key in its place.
+# 401. Each call is then checked against two monthly token caps at the ratelimit service
+# (platform/ratelimit.yaml): its agent's and its agent's team's. Over either, the call gets 429.
+# The ratelimit service being down fails the call, not the cap. agentgateway reads
+# "Authorization: Bearer <key>"; the opencode-go backend then puts the provider key in its place.
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata: {name: opencode-go-keys, namespace: agentgateway-system}
@@ -77,6 +79,19 @@ spec:
       mode: Strict
       configMapSelector:
         matchLabels: {agents.build-coding-agent.dev/api-keys: "true"}
+    # The caps' descriptors name the key's metadata; the amounts are in the ratelimit config.
+    rateLimit:
+      global:
+        backendRef: {name: ratelimit, port: 8081}
+        domain: agw
+        failureMode: FailClosed
+        descriptors:
+        - unit: Tokens
+          entries:
+          - {name: agent, expression: 'apiKey.team + "." + apiKey.agent'}
+        - unit: Tokens
+          entries:
+          - {name: team, expression: 'apiKey.team'}
 ---
 # The catalog MCP servers, each behind its own route: /mcp/github (platform/github-mcp.yaml)
 # and /mcp/demo (platform/demo-mcp.yaml). One server per backend, so tool names keep no

@@ -152,6 +152,12 @@ make_key_secret() {
   echo "Secret $AGW_NS/$KEY_SECRET made from $KEY_NAME"
 }
 
+# The token caps' backend: the ratelimit service and its Redis. The minter fills in its config.
+apply_ratelimit() {
+  sed -e "s|@RATELIMIT_IMAGE@|$RATELIMIT_IMAGE|" -e "s|@REDIS_IMAGE@|$REDIS_IMAGE|" "$PLATFORM_DIR/ratelimit.yaml" | k apply -f -
+  k rollout status deployment/redis deployment/ratelimit -n "$AGW_NS" --timeout="$READY_TIMEOUT"
+}
+
 apply_gateway() {
   k apply -f "$PLATFORM_DIR/gateway.yaml"
   k wait --for=condition=Programmed gateway/agentgateway-proxy -n "$AGW_NS" --timeout="$READY_TIMEOUT"
@@ -175,8 +181,9 @@ install_argocd() {
 # The minter (agent/src/minter/, a CronJob in the teams release) runs its TypeScript source
 # on the pinned node image: each file goes in as minter.source.<name without .ts>.
 install_teams() {
-  local names teams_json file minter_args=()
+  local names teams_json budgets_json file minter_args=()
   names="$("$TEAMS_SH" names)"
+  budgets_json="$("$TEAMS_SH" budgets)"
   teams_json="$(printf '%s\n' "$names" | jq -R . | jq -cs .)"
   for file in "$ROOT"/agent/src/minter/*.ts; do
     minter_args+=(--set-file "minter.source.$(basename "$file" .ts)=$file")
@@ -184,7 +191,7 @@ install_teams() {
   # --reset-then-reuse-values keeps the image pins make deploy set (images.*) on a rerun.
   # --force-conflicts: Argo CD's ApplicationSet controller also writes .spec.generators, so a plain apply conflicts.
   h upgrade --install teams "$PLATFORM_DIR/charts/teams" -n "$ARGOCD_NS" --reset-then-reuse-values --force-conflicts \
-    --set-json "teams=$teams_json" --set "workerImage=$SUBSTRATE_WORKER_IMAGE" \
+    --set-json "teams=$teams_json" --set-json "budgets=$budgets_json" --set "workerImage=$SUBSTRATE_WORKER_IMAGE" \
     --set "minter.image=$NODE_IMAGE" "${minter_args[@]}" \
     --set "argocdNamespace=$ARGOCD_NS" \
     --set "gitops.repoURL=$GITOPS_REPO_URL" --set "gitops.revision=$GITOPS_REVISION" \
@@ -201,6 +208,7 @@ write_cli_files
 install_substrate_and_kagent
 install_gateway
 make_key_secret
+apply_ratelimit
 apply_gateway
 remove_legacy_agents_namespace
 install_argocd

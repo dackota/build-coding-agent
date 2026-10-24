@@ -56,8 +56,12 @@ _Avoid_: agent YAML, manifest
 The ConfigMap `<agent>-registration` the values-file chart renders next to the agent: team, agent, owner, model, and token cap, for the platform to read.
 _Avoid_: agent record
 
+**Token cap**:
+A monthly limit on model tokens, enforced at agentgateway through Envoy's `ratelimit` service and Redis. Each call is checked against two caps: the agent's (`tokenCap` in its values file) and its team's (the **team budget** in `platform/budgets.txt`, which no team can edit). Over either, the call gets HTTP 429. The minter writes both into the ratelimit config; a team with no budget gets no keys. `make status` prints use against each cap. The window is the service's month, 30 days.
+_Avoid_: quota, spend limit
+
 **Minter**:
-The platform's CronJob in `platform-system` (`agent/src/minter/`) that runs every minute, reads the registrations of every listed team, and gives each agent its own agent key and MCP tool policy at agentgateway; it removes both when the agent's registration is gone. Its pure core is `plan()`.
+The platform's CronJob in `platform-system` (`agent/src/minter/`) that runs every minute, reads the registrations of every listed team, and gives each agent its own agent key, token cap and MCP tool policy at agentgateway; it removes all three when the agent's registration is gone. Its pure core is `plan()`.
 _Avoid_: key operator, provisioner
 
 **Agent key**:
