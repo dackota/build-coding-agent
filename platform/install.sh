@@ -182,7 +182,8 @@ install_teams() {
     minter_args+=(--set-file "minter.source.$(basename "$file" .ts)=$file")
   done
   # --reset-then-reuse-values keeps the image pins make deploy set (images.*) on a rerun.
-  h upgrade --install teams "$PLATFORM_DIR/charts/teams" -n "$ARGOCD_NS" --reset-then-reuse-values \
+  # --force-conflicts: Argo CD's ApplicationSet controller also writes .spec.generators, so a plain apply conflicts.
+  h upgrade --install teams "$PLATFORM_DIR/charts/teams" -n "$ARGOCD_NS" --reset-then-reuse-values --force-conflicts \
     --set-json "teams=$teams_json" --set "workerImage=$SUBSTRATE_WORKER_IMAGE" \
     --set "minter.image=$NODE_IMAGE" "${minter_args[@]}" \
     --set "argocdNamespace=$ARGOCD_NS" \
