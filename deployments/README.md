@@ -11,11 +11,14 @@ The team must be on the team list, `platform/teams.txt`. The values file must ma
 schema in `platform/charts/agent/values.schema.json`, which rejects unknown fields. The
 folder's name must be the agent's `name`, and its parent folder the agent's `team`.
 
-Three runtimes deploy today: `stock` (kagent's built-in runtime: a prompt, catalog tools and
-subagents) and `coding` (the platform's coding agent from `agent/`: file tools, `bash` with
-approvals, subagents, skills, and `/implement`; it also reaches GitHub and npm). `byo` runs your own image: set `image` (pinned by digest, from the allowed registry) and
-`command`; the image must meet the rules in
-[docs/byo-contract.md](../docs/byo-contract.md), and `make byo-push` prints the `image` line.
+Three runtimes deploy today: `stock`, `coding`, and `byo`.
+
+- `stock` is kagent's built-in runtime: a prompt, catalog tools and subagents.
+- `coding` is the platform's coding agent from `agent/`: file tools, `bash` with
+  approvals, subagents, skills, and `/implement`. It also reaches GitHub and npm.
+- `byo` runs your own image. Set `image` (pinned by digest, from the allowed registry)
+  and `command`. The image must meet the rules in
+  [docs/byo-contract.md](../docs/byo-contract.md). `make byo-push` prints the `image` line.
 
 ```yaml
 name: my-agent

@@ -4,9 +4,7 @@
 // any failure; the next run (a minute later) converges from wherever this one stopped.
 import { runOnce, type MinterConfig } from "./adapter.ts";
 import { inClusterKube } from "./kube.ts";
-import type { Change } from "./plan.ts";
-
-const TEAM_PATTERN = /^[a-z]([a-z0-9-]{0,18}[a-z0-9])?$/;
+import { TEAM_PATTERN, type Change } from "./plan.ts";
 
 function log(event: string, fields: Record<string, unknown> = {}): void {
   process.stdout.write(`${JSON.stringify({ time: new Date().toISOString(), event, ...fields })}\n`);
