@@ -56,6 +56,14 @@ _Avoid_: agent YAML, manifest
 The ConfigMap `<agent>-registration` the values-file chart renders next to the agent: team, agent, owner, model, and token cap, for the platform to read.
 _Avoid_: agent record
 
+**Minter**:
+The platform's CronJob in `platform-system` (`agent/src/minter/`) that runs every minute, reads the registrations of every listed team, and gives each agent its own agent key; it removes the key of an agent whose registration is gone. Its pure core is `plan()`.
+_Avoid_: key operator, provisioner
+
+**Agent key**:
+One agent's random model key: the key in Secret `<agent>-agent-key` in its team namespace, which its ModelConfig `<agent>-model` names, and the key's hash with `team` and `agent` metadata in agentgateway's ConfigMap `agent-api-keys`. The model route takes no other key. The actor holds only kagent's placeholder.
+_Avoid_: API token, team key
+
 ## Extensibility
 
 **Extension**:

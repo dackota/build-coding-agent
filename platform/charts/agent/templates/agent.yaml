@@ -5,6 +5,26 @@
 {{- $isCoding := eq .Values.runtime "coding" }}
 {{- $tools := include "agent.tools" . }}
 {{- $skills := include "agent.skills" . }}
+# The agent's own key: the platform's minter writes Secret <name>-agent-key in this namespace
+# within about a minute and puts the key's hash in agentgateway's API-key ConfigMap. The actor
+# gets only kagent's placeholder; Substrate's egress gateway adds the key as the call leaves.
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata:
+  name: {{ include "agent.modelConfig" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agent.labels" . | nindent 4 }}
+spec:
+  provider: OpenAI
+  model: {{ .Values.model | quote }}
+  apiKeySecret: {{ include "agent.keySecret" . }}
+  apiKeySecretKey: OPENAI_API_KEY
+  stream: true
+  openAI:
+    apiFormat: chatCompletions
+    baseUrl: http://agentgateway-proxy.agentgateway-system.svc.cluster.local/v1
+---
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
 metadata:

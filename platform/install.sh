@@ -172,13 +172,19 @@ install_argocd() {
 
 # Each team on the list gets team-<team>, its team base, and its AppProject; the one
 # ApplicationSet then deploys every deployments/<team>/<agent>/ folder at GITOPS_REVISION.
+# The minter (agent/src/minter/, a CronJob in the teams release) runs its TypeScript source
+# on the pinned node image: each file goes in as minter.source.<name without .ts>.
 install_teams() {
-  local names teams_json
+  local names teams_json file minter_args=()
   names="$("$TEAMS_SH" names)"
   teams_json="$(printf '%s\n' "$names" | jq -R . | jq -cs .)"
+  for file in "$ROOT"/agent/src/minter/*.ts; do
+    minter_args+=(--set-file "minter.source.$(basename "$file" .ts)=$file")
+  done
   # --reset-then-reuse-values keeps the image pins make deploy set (images.*) on a rerun.
   h upgrade --install teams "$PLATFORM_DIR/charts/teams" -n "$ARGOCD_NS" --reset-then-reuse-values \
     --set-json "teams=$teams_json" --set "workerImage=$SUBSTRATE_WORKER_IMAGE" \
+    --set "minter.image=$NODE_IMAGE" "${minter_args[@]}" \
     --set "argocdNamespace=$ARGOCD_NS" \
     --set "gitops.repoURL=$GITOPS_REPO_URL" --set "gitops.revision=$GITOPS_REVISION" \
     --wait --timeout "$READY_TIMEOUT"

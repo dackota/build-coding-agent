@@ -42,6 +42,7 @@ describe("teams chart", () => {
     expect(project.spec.namespaceResourceWhitelist).toEqual([
       { group: "api.kagent.dev", kind: "AgentTemplate" },
       { group: "api.kagent.dev", kind: "Agent" },
+      { group: "api.kagent.dev", kind: "ModelConfig" },
       { group: "", kind: "ConfigMap" },
     ]);
   });

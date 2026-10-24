@@ -9,7 +9,7 @@ export type AgentConfig = { model: string; baseUrl: string; instruction: string;
  * The slice of kagent's resolved config this agent uses: the model name, the gateway
  * base URL (with /v1), the system prompt, and the subagents under agent.sub_agents (each with
  * its own model and instruction; a missing base URL falls back to the main agent's).
- * There is no key: the gateway holds it.
+ * There is no key here: the actor holds only kagent's placeholder (see gateway.ts).
  */
 export function loadConfig(path: string): AgentConfig {
   let text: string;

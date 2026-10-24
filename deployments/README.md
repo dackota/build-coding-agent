@@ -2,7 +2,10 @@
 
 One folder per agent: `deployments/<team>/<agent>/values.yaml`. Argo CD watches this
 folder on `main`. Merge a folder and the agent deploys into namespace `team-<team>`;
-delete the folder and Argo CD removes it. Nobody applies anything by hand.
+delete the folder and Argo CD removes it. Nobody applies anything by hand. Within about a
+minute of the agent's registration appearing, the platform's minter gives it its own model
+key (Secret `<agent>-agent-key`, which no one needs to read); deleting the folder removes
+the key too.
 
 The team must be on the team list, `platform/teams.txt`. The values file must match the
 schema in `platform/charts/agent/values.schema.json`, which rejects unknown fields. The

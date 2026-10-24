@@ -28,7 +28,7 @@ Both live in `.env` in the main checkout. Set `ENV_FILE=<path>` to use another f
 
 | Key | Goes to | Read by |
 |---|---|---|
-| `OPENCODE_KEY` | Secret `agentgateway-system/opencode-go-key` (`make up`) | agentgateway only. kagent holds a placeholder key and calls the gateway's `/v1`. |
+| `OPENCODE_KEY` | Secret `agentgateway-system/opencode-go-key` (`make up`) | agentgateway only. Each agent calls the gateway's `/v1` with its own agent key, which the minter makes (not from `.env`); the actor holds only kagent's placeholder. |
 | `GITHUB_TOKEN` | Secret `github-mcp-token` in each team namespace, value `Bearer <token>` (`make deploy`) | Substrate's egress gateway only. It adds the header to the agents' `github-mcp` requests (`headersFrom` on the team base's RemoteMCPServer). |
 
 The scripts pipe each value to `kubectl create secret` on stdin. It is never printed,
@@ -42,12 +42,12 @@ written to disk, or put on a command line.
 | `images.lock` | Every image the platform runs, by digest. `make status` checks against it. |
 | `preflight.sh`, `cluster.sh`, `install.sh`, `status.sh`, `smoke.sh`, `deploy.sh`, `lib.sh` | The scripts behind the make targets. `lib.sh` is shared helpers. |
 | `teams.txt`, `teams.sh` | The one team list, and the script that reads it for `make up` (the teams chart and Substrate's namespace lists) and `make status`. Adding a team needs `make down` and `make up`. |
-| `charts/teams/` | Per team: namespace `team-<team>`, its team base (WorkerPool and ServiceAccount `team-default`, `default-model-config`, Harness `kagent-stock`, Harness `coding` once `make deploy` pins its image, subagent templates `explorer-template`, `executor-template`, `reviewer-template` and their ModelConfigs, RemoteMCPServers `github-mcp` and `demo-mcp`, EgressPolicies `git-egress` and `npm-egress`), and Argo CD AppProject `team-<team>` (this repo only, that namespace only, no cluster-scoped kinds). Plus the ApplicationSet `agents`: one Application per `deployments/<team>/<agent>/`. |
-| `charts/agent/` | The values-file chart: renders one agent's AgentTemplate, Agent, and registration ConfigMap, with its subagents, catalog tools and skills by name. `values.schema.json` is the contract. See [../deployments/README.md](../deployments/README.md). |
+| `charts/teams/` | Per team: namespace `team-<team>`, its team base (WorkerPool and ServiceAccount `team-default`, `default-model-config`, Harness `kagent-stock`, Harness `coding` once `make deploy` pins its image, subagent templates `explorer-template`, `executor-template`, `reviewer-template` and their ModelConfigs, RemoteMCPServers `github-mcp` and `demo-mcp`, EgressPolicies `git-egress` and `npm-egress`), and Argo CD AppProject `team-<team>` (this repo only, that namespace only, no cluster-scoped kinds). Plus the ApplicationSet `agents`: one Application per `deployments/<team>/<agent>/`. Plus the minter: CronJob `minter` in `platform-system`, every minute, running `agent/src/minter/` on the pinned node image (`make up` passes the source in). It gives each registered agent Secret `<agent>-agent-key` in its team namespace and the key's hash in `agentgateway-system/agent-api-keys`, and removes both when the agent goes. Its Roles: in each team namespace, list ConfigMaps and list, create, update and delete Secrets; in `agentgateway-system`, get and patch `agent-api-keys` only. |
+| `charts/agent/` | The values-file chart: renders one agent's AgentTemplate, Agent, its own ModelConfig `<agent>-model` (naming Secret `<agent>-agent-key`), and registration ConfigMap, with its subagents, catalog tools and skills by name. `values.schema.json` is the contract. See [../deployments/README.md](../deployments/README.md). |
 | `argocd-values.yaml` | Argo CD chart values (no Dex, no notifications). |
 | `kind-config.yaml` | kagent's own kind config from the pinned release, unchanged. |
 | `kagent-values.yaml` | kagent chart values. Points the model at the gateway. |
-| `gateway.yaml` | The Gateway, the OpenCode Go backend, and the `/v1` route. |
+| `gateway.yaml` | The Gateway, the OpenCode Go backend, the `/v1` route, and its policy: no agent key from ConfigMap `agent-api-keys` gets 401. |
 | `skills/<name>/SKILL.md` | The skills a values file picks by name (`skills: [docs-style]`). `make deploy` builds one image per skill. |
 | `github-mcp.yaml` | GitHub's MCP server with only `issue_read`, `create_branch`, `push_files`, `create_pull_request` (catalog tools `github-read` and `github-write`). It refuses a request with no token. The team base's RemoteMCPServer takes `Authorization` from Secret `github-mcp-token`. |
 | `demo-mcp.yaml` | A one-tool MCP server (`delete_branch`, which deletes nothing; catalog tool `demo-delete-branch`). Shows that approvals work. |

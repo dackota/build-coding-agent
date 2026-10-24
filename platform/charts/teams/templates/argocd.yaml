@@ -24,6 +24,7 @@ spec:
   namespaceResourceWhitelist:
     - {group: api.kagent.dev, kind: AgentTemplate}
     - {group: api.kagent.dev, kind: Agent}
+    - {group: api.kagent.dev, kind: ModelConfig}
     - {group: "", kind: ConfigMap}
 {{- end }}
 ---

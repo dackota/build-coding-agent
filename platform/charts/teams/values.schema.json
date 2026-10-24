@@ -24,6 +24,19 @@
         }
       }
     },
+    "minter": {
+      "description": "Set by make up: the minter's image, by digest, and its source files (name without .ts to text)",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": { "type": "string", "pattern": "^$|^[^\\s@]+@sha256:[a-f0-9]{64}$" },
+        "source": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
     "argocdNamespace": { "type": "string", "minLength": 1 },
     "gitops": {
       "type": "object",

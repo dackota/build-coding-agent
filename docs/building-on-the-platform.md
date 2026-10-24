@@ -151,7 +151,11 @@ plain `value` header: kagent copies those into the agent's config.
 
 **Tested:** yes (the subagents' three ModelConfigs in the team base).
 
-Route every model through agentgateway. Then the key stays in the gateway.
+Route every model through agentgateway. Then the provider key stays in the gateway. The
+`/v1` route takes only an agent key (the minter's, in ConfigMap
+`agentgateway-system/agent-api-keys`): an agent's own ModelConfig names its Secret
+`<agent>-agent-key` with `apiKeySecret`, as the values-file chart renders it. A subagent's
+ModelConfig like this one needs no key: the coding agent's calls carry the parent agent's.
 
 ```yaml
 apiVersion: api.kagent.dev/v1alpha3
@@ -165,8 +169,8 @@ spec:
     baseUrl: http://agentgateway-proxy.agentgateway-system.svc.cluster.local/v1
 ```
 
-A values file picks a model by platform name (`model:`); the chart maps the name to a
-ModelConfig of the team base. A model from another provider needs a new backend and route
+A values file picks a model by platform name (`model:`); the chart renders the agent's own
+ModelConfig `<agent>-model` for it. A model from another provider needs a new backend and route
 in `platform/gateway.yaml` first.
 
 ## Recipe 6: a new subagent

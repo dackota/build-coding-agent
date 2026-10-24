@@ -1,6 +1,7 @@
 # agentgateway in front of the OpenCode Go plan (OpenAI-compatible chat completions).
 # The gateway holds the key: Secret opencode-go-key, made by platform/install.sh from
-# OPENCODE_KEY in .env. kagent's default-model-config points at this Gateway's /v1.
+# OPENCODE_KEY in .env. Every agent's ModelConfig points at this Gateway's /v1, which takes
+# only an agent key the minter made.
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata: {name: agentgateway-proxy, namespace: agentgateway-system}
@@ -50,3 +51,29 @@ spec:
     - group: agentgateway.dev
       kind: AgentgatewayBackend
       name: opencode-go
+---
+# The agents' keys: the platform's minter (agent/src/minter/) keeps one entry per agent here,
+# "<team>.<agent>": {"keyHash":"sha256:<hex>","metadata":{"team":..,"agent":..}}. Only hashes;
+# each key itself is in its agent's Secret. No data here, so re-applying this file keeps the
+# minter's entries.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-api-keys
+  namespace: agentgateway-system
+  labels: {agents.build-coding-agent.dev/api-keys: "true"}
+---
+# The model route wants an agent key: a call with no key, or one not in agent-api-keys, gets
+# 401. agentgateway reads "Authorization: Bearer <key>"; the opencode-go backend then puts the
+# provider key in its place.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata: {name: opencode-go-keys, namespace: agentgateway-system}
+spec:
+  targetRefs:
+  - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: opencode-go}
+  traffic:
+    apiKeyAuthentication:
+      mode: Strict
+      configMapSelector:
+        matchLabels: {agents.build-coding-agent.dev/api-keys: "true"}
