@@ -85,6 +85,23 @@
         ]
       }
     },
+    "github": {
+      "description": "GitHub settings for the agent's catalog tools",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repos": {
+          "description": "The repos the agent's github-write tools may change, as owner/name. A write call on any other repo is refused at agentgateway; with no list, every write call is refused",
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}/([A-Za-z0-9_-][A-Za-z0-9._-]{0,99}|\\.[A-Za-z0-9_-][A-Za-z0-9._-]{0,98})$"
+          }
+        }
+      }
+    },
     "skills": {
       "description": "Skills by name, from platform/skills/; make deploy pins each skill's image",
       "type": "array",

@@ -5,8 +5,11 @@
 // It reads no plaintext key: a Secret's key is known by the hash recorded on it.
 import { createHash, randomBytes } from "node:crypto";
 
-/** An agent the values-file chart registered (its registration ConfigMap), with the MCP tool names of its catalog tools. */
-export type Registration = { team: string; agent: string; tools: readonly string[]; tokenCap?: number };
+/**
+ * An agent the values-file chart registered (its registration ConfigMap), with the MCP tool
+ * names of its catalog tools and the GitHub repos (owner/name) its write tools may change.
+ */
+export type Registration = { team: string; agent: string; tools: readonly string[]; repos?: readonly string[]; tokenCap?: number };
 /** A key Secret the minter made: where it is, whose it is, and the hash of its key. */
 export type KeySecret = { namespace: string; name: string; team: string; agent: string; keyHash: string };
 /** An entry of agentgateway's API-key ConfigMap. */
@@ -33,6 +36,18 @@ export const TEAM_PATTERN = /^[a-z]([a-z0-9-]{0,18}[a-z0-9])?$/;
 const AGENT_PATTERN = /^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$/;
 // An MCP tool name as the catalog has them (platform/charts/agent/templates/_helpers.tpl).
 const TOOL_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+// A GitHub repo as owner/name, as values.schema.json has it (github.repos). No quote or
+// backslash can match, so JSON string quoting is CEL string quoting.
+const REPO_PATTERN = /^([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9_-][A-Za-z0-9._-]{0,99}|\.[A-Za-z0-9_-][A-Za-z0-9._-]{0,98})$/;
+/**
+ * The GitHub MCP tools that change a repo (the catalog's github-write). The minter, not the
+ * registration, decides which tools are held to the repo list.
+ */
+export const REPO_TOOLS: readonly string[] = ["create_branch", "push_files", "create_pull_request"];
+// The tools/call arguments, read from the request body: agentgateway v1.6.0 has no
+// mcp.tool.arguments at authorization time (docs/spike-mcp-authorization.md).
+const CALL = "json(request.body)";
+const ARGS = `${CALL}.params.arguments`;
 const KEY_HASH_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const KEY_BYTES = 32;
 
@@ -55,13 +70,37 @@ function allowedTools(tools: readonly string[]): string[] {
   return [...new Set(tools.filter((t) => TOOL_PATTERN.test(t)))].sort();
 }
 
+/** The repos a policy may name: well-formed owner/name entries, each once, sorted. */
+function allowedRepos(repos: readonly string[]): string[] {
+  return [...new Set(repos.filter((r) => REPO_PATTERN.test(r)))].sort();
+}
+
+const celList = (items: readonly string[]): string => `[${items.map((t) => JSON.stringify(t)).join(", ")}]`;
+
+/** True when a tools/call names one of the repos; with none, false, so no call passes. */
+function repoTest(repos: readonly string[]): string {
+  if (repos.length === 0) return "false";
+  return repos
+    .map((r) => {
+      const [owner, name] = r.split("/");
+      return `(${ARGS}.owner == ${JSON.stringify(owner)} && ${ARGS}.repo == ${JSON.stringify(name)})`;
+    })
+    .join(" || ");
+}
+
 /**
- * The CEL rule that lets one caller, by its key's metadata, see and call only its tools. Every
- * part is a name the schema patterns allow, so JSON string quoting is CEL string quoting.
+ * The CEL rule that lets one caller, by its key's metadata, see and call only its tools. A
+ * repo tool (REPO_TOOLS) is listed by tools/list, but a tools/call of it passes only on one of
+ * the repos. Every part is a name the patterns allow, so JSON string quoting is CEL quoting.
  */
-export function toolRule(team: string, agent: string, tools: readonly string[]): string {
-  const names = tools.map((t) => JSON.stringify(t)).join(", ");
-  return `apiKey.team == ${JSON.stringify(team)} && apiKey.agent == ${JSON.stringify(agent)} && mcp.tool.name in [${names}]`;
+export function toolRule(team: string, agent: string, tools: readonly string[], repos: readonly string[] = []): string {
+  const caller = `apiKey.team == ${JSON.stringify(team)} && apiKey.agent == ${JSON.stringify(agent)}`;
+  const repoTools = tools.filter((t) => REPO_TOOLS.includes(t));
+  const otherTools = tools.filter((t) => !REPO_TOOLS.includes(t));
+  if (repoTools.length === 0) return `${caller} && mcp.tool.name in ${celList(otherTools)}`;
+  const repoPart = `(mcp.tool.name in ${celList(repoTools)} && (${CALL}.method != "tools/call" || ${repoTest(repos)}))`;
+  if (otherTools.length === 0) return `${caller} && ${repoPart}`;
+  return `${caller} && (mcp.tool.name in ${celList(otherTools)} || ${repoPart})`;
 }
 
 /** The registrations that get a key: a listed team, names the schema allows, each once. */
@@ -74,7 +113,7 @@ function wanted(registrations: readonly Registration[], teams: readonly string[]
     if (budgets !== undefined && (!isTokenCount(budgets[r.team]) || !isTokenCount(r.tokenCap))) {
       continue;
     }
-    byId.set(idOf(r.team, r.agent), { team: r.team, agent: r.agent, tools: allowedTools(r.tools), tokenCap: r.tokenCap });
+    byId.set(idOf(r.team, r.agent), { team: r.team, agent: r.agent, tools: allowedTools(r.tools), repos: allowedRepos(r.repos ?? []), tokenCap: r.tokenCap });
   }
   return [...byId.values()];
 }
@@ -135,7 +174,7 @@ export function plan(registrations: readonly Registration[], teams: readonly str
       sets.push({ kind: "set-hash", entry, team: r.team, agent: r.agent, keyHash });
     }
     const policy = toolPolicyName(r.team, r.agent);
-    const rule = toolRule(r.team, r.agent, r.tools);
+    const rule = toolRule(r.team, r.agent, r.tools, r.repos);
     keptPolicies.add(policy);
     const havePolicy = current.policies.find((p) => p.name === policy);
     if (havePolicy?.rule !== rule || havePolicy.team !== r.team || havePolicy.agent !== r.agent) {

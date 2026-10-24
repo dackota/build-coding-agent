@@ -197,7 +197,7 @@ describe("minter adapter", () => {
     kube.seedConfigMap("kube-system", "evil-registration", REGISTRATION, { team: "platform", agent: "evil" });
 
     const state = await readState(kube, CONFIG);
-    expect(state.registrations).toEqual([{ team: "platform", agent: "hello-agent", tools: ["issue_read"], tokenCap: 1000 }]);
+    expect(state.registrations).toEqual([{ team: "platform", agent: "hello-agent", tools: ["issue_read"], repos: [], tokenCap: 1000 }]);
   });
 });
 

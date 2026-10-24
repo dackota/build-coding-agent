@@ -27,4 +27,7 @@ tools:
   - github-read
   - github-write
   - demo-delete-branch
+# The only repo github-write may change: agentgateway refuses a write call on any other.
+github:
+  repos: [dackota/test-repo]
 subagents: [explorer, executor, reviewer]

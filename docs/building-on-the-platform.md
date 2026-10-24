@@ -115,6 +115,17 @@ The chart renders each as a template binding:
   an agent that runs it needs `github-read` as well as `github-write`.
 - `requireApproval: true` pauses before every call (approve, deny, or approve for the
   session). The schema refuses `requireApproval: false` on a write tool.
+- `github.repos` lists the repos `github-write` may change, as `owner/name` (the schema
+  refuses anything else). The minter puts them in the agent's tool policy: a
+  `create_branch`, `push_files` or `create_pull_request` call on any other repo answers
+  `Unknown tool`. With no list, every one of those calls is refused. Names are compared as
+  written, so call a repo with the case the list uses.
+
+  ```yaml
+  tools: [github-read, github-write]
+  github:
+    repos: [dackota/test-repo]
+  ```
 
 ## Recipe 4: add a new MCP server
 

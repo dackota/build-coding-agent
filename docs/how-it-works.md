@@ -81,6 +81,12 @@ nesting is one level deep.
 - **Tool allow list at the gateway.** The minter writes one agentgateway policy per agent,
   `mcp-tools.<team>.<agent>`, that allows only the MCP tools of its catalog tools. Any other
   tool is missing from `tools/list` and answers `Unknown tool`, also to `curl` from `bash`.
+- **Repo list at the gateway.** The same policy lets a GitHub write tool (`create_branch`,
+  `push_files`, `create_pull_request`) run only on the repos in the agent's `github.repos`.
+  The rule reads `owner` and `repo` from the `tools/call` body, because agentgateway
+  v1.6.0 has no `mcp.tool.arguments` at authorization time
+  (`docs/spike-mcp-authorization.md`). A call on another repo answers `Unknown tool`; an
+  agent with no list changes no repo.
 - **Narrow egress.** The actor can reach only `github.com`, `codeload.github.com` and
   `registry.npmjs.org` (the team base's `git-egress` and `npm-egress`). So `git clone` works
   for public repos only.
