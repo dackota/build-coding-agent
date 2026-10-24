@@ -1,5 +1,5 @@
 // Minimal CLI: send one message through the kagent controller and print the reply.
-// Usage: pnpm --dir agent run cli -- "<message>"   (env: AGENT, AGENT_NAMESPACE, KAGENT_NAMESPACE, KAGENT_URL)
+// Usage: pnpm --dir agent run cli -- "<message>"   (env: TEAM, AGENT, AGENT_NAMESPACE, KAGENT_NAMESPACE, KAGENT_URL)
 // Attach files with --file <path> (repeatable); the agent replies with its text and a unified diff.
 // A pause prints the question and a `paused:` line with the ids; answer it with
 //   pnpm --dir agent run cli -- --task <id> --context <id> --request <id> "<answer>" ["<answer 2>" ...]
@@ -9,7 +9,8 @@
 // A reply prints `context=<id>` on stderr; continue the session with `--context <id> "<message>"`.
 // Every call sends the kagent HITL extension header.
 // Without KAGENT_URL it opens a kubectl port-forward to the controller on kind-build-coding-agent,
-// in KAGENT_NAMESPACE (default kagent); the agent is AGENT in AGENT_NAMESPACE (default agents).
+// in KAGENT_NAMESPACE (default kagent); the agent is AGENT (default hello-agent) in namespace
+// team-<TEAM> (default platform), or in AGENT_NAMESPACE when it is set.
 import { type ChildProcess, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -21,7 +22,11 @@ const CONTEXT = "kind-build-coding-agent";
 const CONTROLLER_A2A_PORT = 8083;
 const FORWARD_WAIT_MS = 15_000;
 const DEFAULT_CONTROLLER_NAMESPACE = "kagent";
-const DEFAULT_AGENT_NAMESPACE = "agents";
+// The agent is AGENT in namespace team-<TEAM>: today's agent, hello-agent of the platform team, by default.
+const DEFAULT_TEAM = "platform";
+const DEFAULT_AGENT = "hello-agent";
+// A team name as platform/teams.sh and the values-file schema allow it.
+const TEAM_NAME = /^[a-z]([a-z0-9-]{0,18}[a-z0-9])?$/;
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -188,8 +193,10 @@ const CTRL_C_EXIT_CODE = 130;
 const ARGS_PREVIEW_CHARS = 120;
 // Two namespaces: the controller's (kagent's install) for the port-forward, the agent's for its path.
 const controllerNamespace = process.env.KAGENT_NAMESPACE || DEFAULT_CONTROLLER_NAMESPACE;
-const agentNamespace = process.env.AGENT_NAMESPACE || DEFAULT_AGENT_NAMESPACE;
-const agent = process.env.AGENT ?? "hello-agent";
+const team = process.env.TEAM || DEFAULT_TEAM;
+if (!TEAM_NAME.test(team)) fail(`TEAM ${JSON.stringify(team)} is not a team name (lower-case letters, digits and dashes)`);
+const agentNamespace = process.env.AGENT_NAMESPACE || `team-${team}`;
+const agent = process.env.AGENT || DEFAULT_AGENT;
 const forward = process.env.KAGENT_URL ? undefined : await openForward(controllerNamespace);
 const baseUrl = process.env.KAGENT_URL || forward!.baseUrl;
 const abort = new AbortController();

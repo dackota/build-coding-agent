@@ -40,6 +40,22 @@ _Avoid_: repo, sandbox (the `Sandbox` is the interface that reaches it)
 A second model loop the main agent starts with the `task` tool: `explorer` (reads), `executor` (writes), or `reviewer` (reads). It shares the workspace.
 _Avoid_: child agent, worker
 
+**Team**:
+A group that ships agents, named on the team list `platform/teams.txt`. Its agents run in namespace `team-<team>` and deploy from `deployments/<team>/`.
+_Avoid_: tenant, org
+
+**Team base**:
+The platform-owned objects in each team namespace that the team's agents resolve: WorkerPool and ServiceAccount `team-default`, `default-model-config`, Harness `kagent-stock`, Harness `coding` (pinned by `make deploy`), the subagent templates `explorer`, `executor` and `reviewer`, the catalog RemoteMCPServers, and the git and npm EgressPolicies. Teams cannot change it.
+_Avoid_: team defaults, shared config
+
+**Values file**:
+One agent's `deployments/<team>/<agent>/values.yaml`, checked against the strict schema of `platform/charts/agent`. Its `runtime` field (`stock`, `coding`, `byo`) picks how the agent runs; the kagent object is still called the Harness.
+_Avoid_: agent YAML, manifest
+
+**Registration**:
+The ConfigMap `<agent>-registration` the values-file chart renders next to the agent: team, agent, owner, model, and token cap, for the platform to read.
+_Avoid_: agent record
+
 ## Extensibility
 
 **Extension**:

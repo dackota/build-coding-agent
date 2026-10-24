@@ -1,0 +1,17 @@
+# Argo CD chart values (platform/install.sh). Only what the agent ApplicationSet needs:
+# the controller, repo server, ApplicationSet controller, server, and redis. No Dex and no
+# notifications. install.sh sets the image tags to digests from platform/versions.env.
+global:
+  image:
+    repository: quay.io/argoproj/argocd
+dex:
+  enabled: false
+notifications:
+  enabled: false
+redis:
+  image:
+    repository: ecr-public.aws.com/docker/library/redis
+configs:
+  params:
+    # Reached only through kubectl port-forward on kind.
+    server.insecure: true

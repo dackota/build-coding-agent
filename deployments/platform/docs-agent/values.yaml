@@ -1,0 +1,13 @@
+# docs-agent: the coding runtime like hello-agent, its own template, so its own actor and
+# sessions. One skill, docs-style (platform/skills/docs-style), from the image make deploy pins.
+name: docs-agent
+team: platform
+owner: dackota
+description: Fixes documentation files only
+runtime: coding
+model: glm-5.3-flash
+tokenCap: 1000000
+# Short on purpose: the agent adds its own rules (tools, verification, ask_user).
+systemPrompt: You fix documentation (Markdown files). Never change code files. Change only what the task asks for.
+skills: [docs-style]
+subagents: [explorer]

@@ -1,0 +1,69 @@
+{{- /*
+One AppProject per team: only this repo, only team-<team>, no cluster-scoped kinds, and in
+the namespace only what the values-file chart renders. The ApplicationSet makes one
+Application per deployments/<team>/<agent> folder in project team-<team>; a folder for a
+team not on the list names a project that does not exist, so Argo CD refuses it.
+The {{`{{ ... }}`}} strings are the ApplicationSet's own Go templates, not Helm's.
+*/ -}}
+{{- $cluster := "https://kubernetes.default.svc" }}
+{{- range $team := .Values.teams }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: team-{{ $team }}
+  namespace: {{ $.Values.argocdNamespace }}
+spec:
+  description: Agents of team {{ $team }}, from deployments/{{ $team }}/
+  sourceRepos:
+    - {{ $.Values.gitops.repoURL }}
+  destinations:
+    - server: {{ $cluster }}
+      namespace: team-{{ $team }}
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - {group: api.kagent.dev, kind: AgentTemplate}
+    - {group: api.kagent.dev, kind: Agent}
+    - {group: "", kind: ConfigMap}
+{{- end }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: agents
+  namespace: {{ .Values.argocdNamespace }}
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: {{ .Values.gitops.repoURL }}
+        revision: {{ .Values.gitops.revision }}
+        directories:
+          - path: deployments/*/*
+  template:
+    metadata:
+      name: '{{`{{index .path.segments 1}}-{{.path.basename}}`}}'
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: '{{`team-{{index .path.segments 1}}`}}'
+      source:
+        repoURL: {{ .Values.gitops.repoURL }}
+        targetRevision: {{ .Values.gitops.revision }}
+        path: platform/charts/agent
+        helm:
+          releaseName: '{{`{{.path.basename}}`}}'
+          valueFiles:
+            - '{{`../../../{{.path.path}}/values.yaml`}}'
+          # The platform's pinned skill images (make deploy); they override the values file.
+          valuesObject:
+            platform:
+              skillImages: {{ .Values.images.skills | toJson }}
+      destination:
+        server: {{ $cluster }}
+        namespace: '{{`team-{{index .path.segments 1}}`}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true

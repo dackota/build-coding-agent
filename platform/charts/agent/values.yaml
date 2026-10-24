@@ -1,0 +1,3 @@
+# Defaults for a team's values file. Every field and its limits: values.schema.json.
+model: glm-5.3-flash
+tokenCap: 1000000

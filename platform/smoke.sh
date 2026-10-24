@@ -3,14 +3,17 @@
 #  1. Push a tiny image to the local registry, read its sha256 digest, and apply a
 #     kagent Harness that names the image by that digest. The API server must accept
 #     it, and the kind node must pull the image by digest from the registry.
-#  2. Send one A2A message to kagent's stock agent, which answers through agentgateway,
-#     and print the reply. This spends model tokens on the OpenCode Go plan.
+#  2. Send one A2A message to triage-agent, the platform team's agent on kagent's stock
+#     runtime, which answers through agentgateway, and print the reply. This spends model
+#     tokens on the OpenCode Go plan.
 set -euo pipefail
 # shellcheck source=platform/lib.sh
 . "$(dirname "$0")/lib.sh"
 
 SMOKE_REPO="registry-smoke"
 SMOKE_HARNESS="registry-smoke"
+# A stock-runtime agent of the platform team (deployments/platform/triage-agent).
+SMOKE_AGENT="triage-agent"
 LOCAL_PORT="${LOCAL_PORT:-18083}"
 REPLY_TIMEOUT="${REPLY_TIMEOUT:-300}"
 RETRY_DELAY="${RETRY_DELAY:-5}"
@@ -45,27 +48,27 @@ check_harness() {
   k apply -f - <<EOF
 apiVersion: api.kagent.dev/v1alpha3
 kind: Harness
-metadata: {name: $SMOKE_HARNESS, namespace: $AGENTS_NS}
+metadata: {name: $SMOKE_HARNESS, namespace: $PLATFORM_TEAM_NS}
 spec:
   byo: {}
   workload:
     image: $image
     command: ["/bin/true"]
   substrate:
-    workerPoolRef: {name: agents-default}
+    workerPoolRef: {name: team-default}
     snapshotPolicy:
       location: gs://ate-snapshots/kagent/
 EOF
-  got="$(k get harness "$SMOKE_HARNESS" -n "$AGENTS_NS" -o 'jsonpath={.spec.workload.image}')"
+  got="$(k get harness "$SMOKE_HARNESS" -n "$PLATFORM_TEAM_NS" -o 'jsonpath={.spec.workload.image}')"
   [ "$got" = "$image" ] || fail "Harness $SMOKE_HARNESS image is $got, want $image"
-  k get harness "$SMOKE_HARNESS" -n "$AGENTS_NS"
+  k get harness "$SMOKE_HARNESS" -n "$PLATFORM_TEAM_NS"
   node="$(kind get nodes --name "$CLUSTER" | head -n 1)"
   docker exec "$node" crictl pull "$image" >/dev/null ||
     fail "kind node $node could not pull $image from the registry"
   echo "ok   Harness $SMOKE_HARNESS accepted with $image; node $node pulled it"
 }
 
-# One JSON-RPC SendMessage to the stock agent through the controller's A2A endpoint.
+# One JSON-RPC SendMessage to the stock-runtime agent through the controller's A2A endpoint.
 # Retries while the agent is still waking (a non-2xx answer or a JSON-RPC error).
 send_message() {
   local pf body resp answer deadline=$((SECONDS + REPLY_TIMEOUT))
@@ -81,19 +84,19 @@ send_message() {
   while :; do
     if resp="$(curl -fsS --max-time "$A2A_MAX_TIME" -H 'content-type: application/json' -H 'A2A-Version: 1.0' \
       -H 'X-User-Id: smoke@build-coding-agent' -d "$body" \
-      "http://localhost:$LOCAL_PORT/agents/$AGENTS_NS/stock-agent" 2>&1)"; then
+      "http://localhost:$LOCAL_PORT/agents/$PLATFORM_TEAM_NS/$SMOKE_AGENT" 2>&1)"; then
       # A 2xx answer that is not JSON is a controller fault, not a waking agent.
       answer="$(printf '%s' "$resp" | jq -r '[.result.task.artifacts[]?.parts[]?.text // empty,
         .result.message.parts[]?.text // empty] | join("\n")')" ||
-        fail "stock-agent answered with a body jq cannot read: $(first_line "$resp" | cut -c1-"$PREVIEW_CHARS")"
+        fail "$SMOKE_AGENT answered with a body jq cannot read: $(first_line "$resp" | cut -c1-"$PREVIEW_CHARS")"
       if [ -n "$answer" ]; then
-        echo "stock-agent replied:"
+        echo "$SMOKE_AGENT replied:"
         printf '%s\n' "$answer"
         return 0
       fi
     fi
     if [ "$SECONDS" -ge "$deadline" ]; then
-      fail "no reply from stock-agent within ${REPLY_TIMEOUT}s; last answer: $(first_line "$resp")"
+      fail "no reply from $SMOKE_AGENT within ${REPLY_TIMEOUT}s; last answer: $(first_line "$resp")"
     fi
     echo "no reply yet ($(first_line "$resp" | cut -c1-"$PREVIEW_CHARS")); retrying in ${RETRY_DELAY}s"
     sleep "$RETRY_DELAY"

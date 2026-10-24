@@ -1,0 +1,82 @@
+{{- /*
+Each team's base: kagent resolves a Harness's workerPoolRef and an AgentTemplate's
+modelConfig in the object's own namespace, so every team namespace gets its own copy.
+Teams cannot change it: their AppProject allows only the kinds the values-file chart renders.
+*/ -}}
+{{- range $team := .Values.teams }}
+{{- $ns := printf "team-%s" $team }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    agents.build-coding-agent.dev/team: {{ $team }}
+---
+# The worker pods' identity; it needs no RBAC, like the kagent chart's kagent-default.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: team-default
+  namespace: {{ $ns }}
+---
+# Mirrors the kagent chart's WorkerPool kagent-default (templates/substrate-workerpool.yaml).
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: team-default
+  namespace: {{ $ns }}
+  labels:
+    kagent.dev/worker-pool-name: team-default
+    kagent.dev/worker-pool-namespace: {{ $ns }}
+spec:
+  replicas: 1
+  workerImage: {{ $.Values.workerImage | quote }}
+  sandboxClasses:
+    - name: gvisor
+      configRef: {name: gvisor-default}
+  template:
+    serviceAccountName: team-default
+---
+# A placeholder key, like the kagent chart's kagent-openai Secret: agentgateway holds the
+# real key and ignores this one, but the ModelConfig must name a Secret that resolves.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kagent-openai
+  namespace: {{ $ns }}
+type: Opaque
+stringData:
+  OPENAI_API_KEY: not-used-agentgateway-holds-the-key
+---
+# The default model config (platform model name glm-5.3-flash): the model goes through
+# agentgateway only.
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata:
+  name: default-model-config
+  namespace: {{ $ns }}
+spec:
+  provider: OpenAI
+  model: glm-5.3-flash
+  apiKeySecret: kagent-openai
+  apiKeySecretKey: OPENAI_API_KEY
+  stream: true
+  openAI:
+    apiFormat: chatCompletions
+    baseUrl: http://agentgateway-proxy.agentgateway-system.svc.cluster.local/v1
+---
+# kagent's built-in runtime (no workload.image: the release's digest-pinned golang-adk
+# image), for runtime: stock agents.
+apiVersion: api.kagent.dev/v1alpha3
+kind: Harness
+metadata:
+  name: kagent-stock
+  namespace: {{ $ns }}
+spec:
+  kagent: {}
+  substrate:
+    workerPoolRef: {name: team-default}
+    snapshotPolicy:
+      location: gs://ate-snapshots/kagent/
+{{- end }}

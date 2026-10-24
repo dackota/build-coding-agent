@@ -1,15 +1,17 @@
 # The GitHub MCP server for git out: the agent creates a branch, pushes files, and opens a
 # pull request through it. github-mcp-server (http mode, only the four tools below) wants a
 # GitHub token on every request and refuses one without it. This namespace holds no token.
-# The RemoteMCPServer's Authorization header comes from Secret agents/github-mcp-token (made by
-# deploy.sh from GITHUB_TOKEN in .env, value "Bearer <token>"). kagent puts only
+# Each team base has a RemoteMCPServer github-mcp for it (platform/charts/teams/templates/coding.yaml)
+# whose Authorization header comes from Secret github-mcp-token in the team's namespace (made
+# by deploy.sh from GITHUB_TOKEN in .env, value "Bearer <token>"). kagent puts only
 # __KAGENT_ENV[KAGENT_CREDENTIAL_<hash>]__ in the agent's config and the placeholder
 # kagent-credential-injected in the actor's env; Substrate's egress gateway swaps the
 # placeholder for the Secret as the request leaves the actor. So the token is never in the
 # actor, its config, or this pod's spec, and a pod with no token gets refused.
-# agent.yaml.tmpl binds create_branch, push_files and create_pull_request with requireApproval, so
-# each call the model makes pauses for the user. issue_read is not bound for the model: the
-# implement loop (agent/src/loop-github.ts) calls it, and its three fixed git calls, from code.
+# The catalog tool github-write binds create_branch, push_files and create_pull_request with
+# requireApproval, so each call the model makes pauses for the user; github-read binds
+# issue_read. The implement loop (agent/src/loop-github.ts) calls issue_read, and its three
+# fixed git calls, from code.
 apiVersion: v1
 kind: Namespace
 metadata: {name: github-mcp}
@@ -37,14 +39,3 @@ metadata: {name: github-mcp, namespace: github-mcp}
 spec:
   selector: {app: github-mcp}
   ports: [{port: 8080, targetPort: 8080}]
----
-apiVersion: api.kagent.dev/v1alpha3
-kind: RemoteMCPServer
-metadata: {name: github-mcp, namespace: agents}
-spec:
-  description: GitHub through github-mcp-server; the egress gateway adds the token
-  protocol: STREAMABLE_HTTP
-  url: http://github-mcp.github-mcp.svc.cluster.local:8080/
-  headersFrom:
-    - name: Authorization
-      valueFrom: {type: Secret, name: github-mcp-token, key: token}

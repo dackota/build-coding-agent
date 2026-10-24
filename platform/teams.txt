@@ -1,0 +1,6 @@
+# The teams on the platform, one name per line (lower-case letters, digits, dashes).
+# Each team gets namespace team-<name>, its team base, and Argo CD project team-<name>;
+# its agents live in deployments/<name>/<agent>/values.yaml.
+# Adding a team needs a cluster rebuild (make down, make up): Substrate reads its
+# namespace lists only at install.
+platform

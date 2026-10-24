@@ -1,0 +1,139 @@
+# Spike (ticket #50): agentgateway v1.6.0 MCP authorization per caller, on tool names and
+# on mcp.tool.arguments. Everything lives in namespace spike-mcp and rides the existing
+# Gateway agentgateway-proxy on path /spike-mcp. Applied and removed by
+# platform/spike-mcp-authz.sh. Nothing here is part of `make up`.
+# deploy.sh-style placeholder: @NODE_IMAGE@ is filled from platform/versions.env by the script.
+apiVersion: v1
+kind: Namespace
+metadata: {name: spike-mcp}
+---
+# A fake MCP server with three tools; issue_read and create_branch take owner and repo.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: spike-server, namespace: spike-mcp}
+data:
+  server.mjs: |
+    import { createServer } from "node:http";
+    const repoProps = { owner: { type: "string" }, repo: { type: "string" } };
+    const TOOLS = ["issue_read", "create_branch", "delete_branch"].map((name) => ({
+      name,
+      description: `spike tool ${name}`,
+      inputSchema: { type: "object", properties: repoProps, required: ["owner", "repo"] },
+    }));
+    function answer(rpc) {
+      switch (rpc.method) {
+        case "initialize":
+          return { protocolVersion: rpc.params?.protocolVersion ?? "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "spike", version: "1" } };
+        case "tools/list":
+          return { tools: TOOLS };
+        case "tools/call": {
+          const a = rpc.params?.arguments ?? {};
+          console.log(JSON.stringify({ event: "tools-call", tool: rpc.params?.name, owner: a.owner, repo: a.repo }));
+          return { content: [{ type: "text", text: `ran ${rpc.params?.name} on ${a.owner}/${a.repo}` }], isError: false };
+        }
+        default:
+          return {};
+      }
+    }
+    createServer((req, res) => {
+      if (req.method !== "POST") return res.writeHead(405).end();
+      const chunks = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => {
+        let rpc;
+        try { rpc = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return res.writeHead(400).end(); }
+        if (rpc.id === undefined) return res.writeHead(202).end();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: answer(rpc) }));
+      });
+    }).listen(8080);
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: spike-server, namespace: spike-mcp}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: spike-server}}
+  template:
+    metadata: {labels: {app: spike-server}}
+    spec:
+      containers:
+        - name: server
+          image: "@NODE_IMAGE@"
+          command: ["node", "/srv/server.mjs"]
+          ports: [{containerPort: 8080}]
+          volumeMounts: [{name: src, mountPath: /srv}]
+          readinessProbe: {tcpSocket: {port: 8080}, periodSeconds: 2}
+      volumes:
+        - name: src
+          configMap: {name: spike-server}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: spike-server, namespace: spike-mcp}
+spec:
+  selector: {app: spike-server}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+# Two callers. The key metadata is what the CEL rules read as apiKey.agent.
+apiVersion: v1
+kind: Secret
+metadata: {name: spike-keys, namespace: spike-mcp}
+type: Opaque
+stringData:
+  alice: '{"key":"sk-spike-alice","metadata":{"agent":"alice"}}'
+  bob: '{"key":"sk-spike-bob","metadata":{"agent":"bob"}}'
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata: {name: spike-mcp, namespace: spike-mcp}
+spec:
+  mcp:
+    targets:
+    - name: spike
+      static: {host: spike-server.spike-mcp.svc.cluster.local, port: 8080, path: /mcp, protocol: StreamableHTTP}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: spike-mcp, namespace: spike-mcp}
+spec:
+  parentRefs:
+  - {name: agentgateway-proxy, namespace: agentgateway-system, sectionName: http}
+  rules:
+  - matches:
+    - path: {type: PathPrefix, value: /spike-mcp}
+    backendRefs:
+    - {group: agentgateway.dev, kind: AgentgatewayBackend, name: spike-mcp}
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata: {name: spike-keys, namespace: spike-mcp}
+spec:
+  targetRefs:
+  - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: spike-mcp}
+  traffic:
+    apiKeyAuthentication:
+      mode: Strict
+      secretRef: {name: spike-keys}
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata: {name: spike-tools, namespace: spike-mcp}
+spec:
+  targetRefs:
+  - {group: agentgateway.dev, kind: AgentgatewayBackend, name: spike-mcp}
+  backend:
+    mcp:
+      authorization:
+        action: Allow
+        policy:
+          matchExpressions:
+          # alice: two tools, and only on owner acme with repo good or fine. A tool call carries
+          # its arguments in the request body (mcp.tool.arguments is empty at this stage); other methods, tools/list, skip the argument test.
+          - >-
+            apiKey.agent == "alice"
+            && mcp.tool.name in ["issue_read", "create_branch"]
+            && (json(request.body).method != "tools/call"
+                || (json(request.body).params.arguments.owner == "acme"
+                    && json(request.body).params.arguments.repo in ["good", "fine"]))
+          - 'apiKey.agent == "bob" && mcp.tool.name == "issue_read"'

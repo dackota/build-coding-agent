@@ -1,0 +1,9 @@
+# The teams on the platform, from the team list (platform/teams.txt): for each team its
+# namespace team-<team>, its platform-owned team base, and its Argo CD AppProject; plus
+# the one ApplicationSet that makes an Application per deployments/<team>/<agent> folder.
+# install.sh installs it after Argo CD; the team list reaches it as --set-json teams=[...].
+apiVersion: v2
+name: teams
+description: Team namespaces, team bases, AppProjects and the agents ApplicationSet
+type: application
+version: 0.1.0

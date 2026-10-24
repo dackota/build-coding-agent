@@ -1,0 +1,18 @@
+{{- include "agent.check" . -}}
+# The registration: what the platform's minter reads to give this agent its key, cap,
+# and tool policy. It goes when the agent's folder goes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.name }}-registration
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agent.labels" . | nindent 4 }}
+    agents.build-coding-agent.dev/registration: "true"
+data:
+  team: {{ .Values.team | quote }}
+  agent: {{ .Values.name | quote }}
+  owner: {{ .Values.owner | quote }}
+  runtime: {{ .Values.runtime | quote }}
+  model: {{ .Values.model | quote }}
+  tokenCap: {{ .Values.tokenCap | int64 | toString | quote }}

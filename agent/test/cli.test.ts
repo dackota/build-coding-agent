@@ -381,13 +381,26 @@ async function runForwardedCli(env: Record<string, string>): Promise<{ code: num
 }
 
 describe("CLI namespaces", () => {
-  it("with no env the CLI port-forwards to the controller in kagent and sends to the agent in agents", async () => {
+  it("with no env the CLI port-forwards to the controller in kagent and sends to hello-agent in team-platform", async () => {
     const got = await runForwardedCli({});
 
     expect(got.forwardNamespace).toBe("kagent");
-    expect(got.paths).toEqual(["/agents/agents/hello-agent"]);
+    expect(got.paths).toEqual(["/agents/team-platform/hello-agent"]);
     expect(got.stdout).toContain("pong");
     expect(got.code).toBe(0);
+  });
+
+  it("TEAM picks the agent's namespace team-<team>", async () => {
+    const got = await runForwardedCli({ TEAM: "payments", AGENT: "triage-agent" });
+
+    expect(got.paths).toEqual(["/agents/team-payments/triage-agent"]);
+  });
+
+  it("rejects a TEAM that is not a team name, before any request", async () => {
+    const got = await runForwardedCli({ TEAM: "../kagent" });
+
+    expect(got.code).toBe(2);
+    expect(got.paths).toEqual([]);
   });
 
   it("AGENT_NAMESPACE changes only the agent path", async () => {
@@ -401,6 +414,6 @@ describe("CLI namespaces", () => {
     const got = await runForwardedCli({ KAGENT_NAMESPACE: "kagent-ctl" });
 
     expect(got.forwardNamespace).toBe("kagent-ctl");
-    expect(got.paths).toEqual(["/agents/agents/hello-agent"]);
+    expect(got.paths).toEqual(["/agents/team-platform/hello-agent"]);
   });
 });

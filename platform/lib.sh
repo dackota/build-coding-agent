@@ -19,13 +19,20 @@ MAIN_CHECKOUT="$(dirname "$(git -C "$ROOT" rev-parse --path-format=absolute --gi
 ENV_FILE="${ENV_FILE:-$MAIN_CHECKOUT/.env}"
 KEY_NAME="OPENCODE_KEY"
 
-# kagent's own install (the controller); every agent of ours lives in AGENTS_NS (platform/agents.yaml).
+# kagent's own install (the controller). Every agent lives in its team's namespace,
+# team-<team>; the platform team's own agents (deployments/platform/) in PLATFORM_TEAM_NS.
 KAGENT_NS="kagent"
-AGENTS_NS="agents"
+PLATFORM_TEAM_NS="team-platform"
 GITHUB_MCP_NS="github-mcp"
 SUBSTRATE_NS="ate-system"
 AGW_NS="agentgateway-system"
 KEY_SECRET="opencode-go-key"
+# Argo CD deploys deployments/<team>/<agent>/ from this repo at GITOPS_REVISION into team-<team>.
+ARGOCD_NS="argocd"
+GITOPS_REPO_URL="https://github.com/dackota/build-coding-agent.git"
+# Argo tracks main; set GITOPS_REVISION=<branch> on make up to try a change before merge.
+GITOPS_REVISION="${GITOPS_REVISION:-main}"
+TEAMS_SH="$PLATFORM_DIR/teams.sh"
 
 fail() { echo "$(basename "$0"): $*" >&2; exit 1; }
 k() { kubectl --context "$CTX" "$@"; }

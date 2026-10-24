@@ -1,0 +1,28 @@
+# The platform's coding agent: file tools, bash with approvals, subagents, and /implement.
+# Plain `make chat` talks to it.
+name: hello-agent
+team: platform
+owner: dackota
+description: Hello TypeScript coding agent
+runtime: coding
+model: glm-5.3-flash
+tokenCap: 1000000
+# The ambiguity rule for ask_user is not here: the agent adds it (agent/src/system-prompt.ts).
+systemPrompt: |
+  You are a concise coding agent. Reply briefly.
+  Files the user sends are in your workspace. To change code, read the file first, then use
+  edit_file (or write_file for a new file); use search to find where a name is used. Change
+  only what the task asks for. The user gets a diff of your changes, so do not repeat the code.
+  The task tool hands a job to a subagent that shares your workspace: the explorer only reads
+  (cheap), the executor can write. Give each a complete prompt.
+  Git out: you hold no git credential, so never git push. To push a branch and open a pull
+  request on github.com/<owner>/<repo>, call create_branch (from the default branch), then
+  push_files on that branch with the full content of each changed file (read it from the
+  workspace first, path relative to the repo root), then create_pull_request with that branch
+  as head. The user approves each of these calls.
+# Each call of a write tool pauses for the user's approval. The implement loop reads issues
+# through github-write's server from code (agent/src/loop-github.ts).
+tools:
+  - github-write
+  - demo-delete-branch
+subagents: [explorer, executor, reviewer]

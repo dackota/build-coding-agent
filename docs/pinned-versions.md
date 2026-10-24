@@ -41,6 +41,7 @@ kagent CLI installs the kagent and Substrate charts by the same versions.
 | `oci://ghcr.io/kagent-dev/substrate/helm/substrate-podcert` | 0.6.0-alpha3 | `sha256:e48412f8a88165499e11f590e71920df0437939f284134b5bc0a3cf151d05352` | same |
 | `oci://cr.agentgateway.dev/charts/agentgateway-crds` | v1.6.0 | `sha256:dd7f965d43e54dffa9c95af089b6f762397a23c963a159ad6d4992f6c582292a` | https://agentgateway.dev/docs/kubernetes/latest/install/helm/ (v1.6.0 is the newest stable; v1.7.0-alpha.1 is a prerelease) |
 | `oci://cr.agentgateway.dev/charts/agentgateway` | v1.6.0 | `sha256:d3edf2b33cbf2e9d59406c207b8d3554597799707b8803b5f62e698fe5376e28` | same |
+| `oci://ghcr.io/argoproj/argo-helm/argo-cd` | 10.11.1 (Argo CD v3.5.6) | `sha256:2ac5224a5c201789f96aa9e085673d80732591d1b3e815a8a825a4db6d1d7c88` | https://github.com/argoproj/argo-helm (newest on 2026-10-23, `helm show chart`) |
 | Gateway API CRDs `standard-install.yaml` | v1.6.0 | file SHA-256 `a557172e8348f758479e9ee4000bbbb4b4aa48302a6b73461823ea5349bad56d` | https://github.com/kubernetes-sigs/gateway-api/releases/tag/v1.6.0, named by the agentgateway install guide |
 
 ## Images
@@ -51,7 +52,9 @@ Set by digest in the install values (`versions.env`, applied by `install.sh`):
 |---|---|---|---|
 | `ghcr.io/kagent-dev/kagent/controller` | 1.0.0-alpha17 | `sha256:d0c5c21998f7492fe42636c9216accc7f263ee3087729989d9b3cb78e427c5f5` | ghcr.io, tag 1.0.0-alpha17 |
 | `ghcr.io/kagent-dev/kagent/ui` | 1.0.0-alpha17 | `sha256:68dc2ec374a5250a545b85850b6d284c318e3472c73de6e419e534cdcf5b79a1` | ghcr.io, tag 1.0.0-alpha17 |
-| `ghcr.io/kagent-dev/substrate/ateworker-gvisor` (WorkerPools `kagent-default` and `agents-default`) | v0.6.0-alpha3 | `sha256:56e6231c3ed48d54afd3068b6313a1545df1277e0ac1faa6090085cc480d573e` | ghcr.io; the CLI sets this image by tag, `install.sh` overrides it with the digest (and fills it into `platform/agents.yaml`) |
+| `ghcr.io/kagent-dev/substrate/ateworker-gvisor` (WorkerPools `kagent-default` and each team's `team-default`) | v0.6.0-alpha3 | `sha256:56e6231c3ed48d54afd3068b6313a1545df1277e0ac1faa6090085cc480d573e` | ghcr.io; the CLI sets this image by tag, `install.sh` overrides it with the digest (and sets it in the teams chart) |
+| `quay.io/argoproj/argocd` (every Argo CD component; `ARGOCD_IMAGE_TAG`) | v3.5.6 | `sha256:8e5cc5bb008df8a09dba439462e58c94c55b7735888d3ebde0c25fc05e4e5335` | the argo-cd chart's appVersion; index digest read on 2026-10-23 with `docker buildx imagetools inspect` |
+| `ecr-public.aws.com/docker/library/redis` (Argo CD's cache; `ARGOCD_REDIS_IMAGE_TAG`) | 8.6.4-alpine | `sha256:2cc044fc5a07c9b701f8f1255a309ae9ad7856e694ac03513bf3648c01e40763` | the argo-cd chart's default tag; index digest read on 2026-10-23 |
 | `postgres` (kagent's development database) | 18-alpine | `sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15` | the alpha17 CLI's default `install.bundledPostgresImage` |
 
 Digest-pinned by the pinned charts themselves:

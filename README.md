@@ -33,6 +33,7 @@ make chat MSG="What is 7 times 6?"
 | Understand the pieces and how a message flows | [docs/how-it-works.md](docs/how-it-works.md) |
 | Talk to the agent, answer its questions, approve commands | [docs/using-the-agent.md](docs/using-the-agent.md) |
 | Turn a GitHub issue into a pull request (`/implement`) | [docs/implement-loop.md](docs/implement-loop.md) |
+| Ship a team agent from a values file (Argo CD) | [deployments/README.md](deployments/README.md) |
 | Add agents, MCP servers, models, or egress on the cluster | [docs/building-on-the-platform.md](docs/building-on-the-platform.md) |
 | Add a tool or a tool policy in code | [docs/extensions.md](docs/extensions.md) |
 | Find my way around the agent code, run the tests | [agent/README.md](agent/README.md) |
