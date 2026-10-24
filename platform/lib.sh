@@ -26,6 +26,12 @@ GITHUB_MCP_NS="github-mcp"
 SUBSTRATE_NS="ate-system"
 AGW_NS="agentgateway-system"
 KEY_SECRET="opencode-go-key"
+# Argo CD deploys deployments/<team>/<agent>/ from this repo at GITOPS_REVISION into team-<team>.
+ARGOCD_NS="argocd"
+GITOPS_REPO_URL="https://github.com/dackota/build-coding-agent.git"
+# Argo tracks main; set GITOPS_REVISION=<branch> on make up to try a change before merge.
+GITOPS_REVISION="${GITOPS_REVISION:-main}"
+TEAMS_SH="$PLATFORM_DIR/teams.sh"
 
 fail() { echo "$(basename "$0"): $*" >&2; exit 1; }
 k() { kubectl --context "$CTX" "$@"; }

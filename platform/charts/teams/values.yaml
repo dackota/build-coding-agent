@@ -1,0 +1,7 @@
+# install.sh sets teams from platform/teams.txt and workerImage from platform/versions.env.
+teams: []
+workerImage: ""
+argocdNamespace: argocd
+gitops:
+  repoURL: https://github.com/dackota/build-coding-agent.git
+  revision: main

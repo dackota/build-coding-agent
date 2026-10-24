@@ -1,0 +1,9 @@
+# The values-file chart: one team agent from one values file
+# (deployments/<team>/<agent>/values.yaml). Argo CD renders it with the folder's name as
+# the release name and team-<team> as the namespace (platform/charts/teams, the
+# ApplicationSet). values.schema.json is the contract; it rejects unknown fields.
+apiVersion: v2
+name: agent
+description: One team agent on kagent v1alpha3, from a values file
+type: application
+version: 0.1.0

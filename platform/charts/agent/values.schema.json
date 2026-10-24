@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "A team agent's values file",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "team", "owner", "runtime", "model", "tokenCap"],
+  "properties": {
+    "name": {
+      "description": "The agent's name; the same as its folder under deployments/<team>/",
+      "type": "string",
+      "pattern": "^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$"
+    },
+    "team": {
+      "description": "The team that owns the agent, one of platform/teams.txt; the agent runs in team-<team>",
+      "type": "string",
+      "pattern": "^[a-z]([a-z0-9-]{0,18}[a-z0-9])?$"
+    },
+    "owner": {
+      "description": "Who to ask about this agent (a GitHub handle or an email)",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 300
+    },
+    "runtime": {
+      "description": "stock: kagent's built-in runtime. coding and byo come in later releases",
+      "type": "string",
+      "enum": ["stock", "coding", "byo"]
+    },
+    "model": {
+      "description": "A platform model name",
+      "type": "string",
+      "enum": ["glm-5.3-flash"]
+    },
+    "systemPrompt": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20000
+    },
+    "tokenCap": {
+      "description": "The agent's monthly token cap, inside its team's cap",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50000000
+    }
+  },
+  "allOf": [
+    {
+      "if": { "required": ["runtime"], "properties": { "runtime": { "const": "stock" } } },
+      "then": { "required": ["systemPrompt"] }
+    }
+  ]
+}

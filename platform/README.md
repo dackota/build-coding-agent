@@ -15,11 +15,11 @@ The kube context is `kind-build-coding-agent`. Every script passes `--context` (
 | Command | What it does |
 |---|---|
 | `make preflight` | Checks tools, versions, and `OPENCODE_KEY`. Creates nothing. |
-| `make up` | Preflight, then creates the registry (`localhost:5001`) and the kind cluster, then installs Substrate and kagent (through the pinned kagent CLI), Gateway API CRDs, agentgateway, the key Secret, and kagent's stock agent. Safe to run again. |
-| `make status` | One `ok` or `FAIL` line each for the cluster, registry, Substrate, kagent, agentgateway, model route, stock agent, triage-agent and docs-agent (after `make deploy`), and image pins. Exits non-zero on any `FAIL`. |
+| `make up` | Preflight, then creates the registry (`localhost:5001`) and the kind cluster, then installs Substrate and kagent (through the pinned kagent CLI), Gateway API CRDs, agentgateway, the key Secret, kagent's stock agent, Argo CD, and the teams of `teams.txt`. Safe to run again. `GITOPS_REVISION=<branch> make up` points Argo CD at a branch instead of `main`. |
+| `make status` | One `ok` or `FAIL` line each for the cluster, registry, Substrate, kagent, agentgateway, model route, stock agent, Argo CD and its ApplicationSet, each team base, triage-agent and docs-agent (after `make deploy`), and image pins. Exits non-zero on any `FAIL`. |
 | `make smoke` | Proves the platform without our agent: pushes a tiny image, runs it in a Harness by digest, and sends one message to `stock-agent`. Spends model tokens. |
 | `make deploy` | Makes the GitHub token Secret, builds and pushes the agent image, applies the MCP servers and egress policy, then applies `agent.yaml.tmpl` by image digest. Waits for the Agent to be Ready. |
-| `make chat MSG=...` | Sends one message to `hello-agent`. See [../docs/using-the-agent.md](../docs/using-the-agent.md). |
+| `make chat MSG=...` | Sends one message to `hello-agent`; `TEAM=<team> AGENT=<agent>` talks to a team agent instead. See [../docs/using-the-agent.md](../docs/using-the-agent.md). |
 | `make down` | Deletes the cluster and the registry. |
 
 ## Secrets
@@ -41,6 +41,10 @@ written to disk, or put on a command line.
 | `versions.env` | Every pinned version and digest. See [../docs/pinned-versions.md](../docs/pinned-versions.md). |
 | `images.lock` | Every image the platform runs, by digest. `make status` checks against it. |
 | `preflight.sh`, `cluster.sh`, `install.sh`, `status.sh`, `smoke.sh`, `deploy.sh`, `lib.sh` | The scripts behind the make targets. `lib.sh` is shared helpers. |
+| `teams.txt`, `teams.sh` | The one team list, and the script that reads it for `make up` (the teams chart and Substrate's namespace lists) and `make status`. Adding a team needs `make down` and `make up`. |
+| `charts/teams/` | Per team: namespace `team-<team>`, its team base (WorkerPool and ServiceAccount `team-default`, `default-model-config`, Harness `kagent-stock`), and Argo CD AppProject `team-<team>` (this repo only, that namespace only, no cluster-scoped kinds). Plus the ApplicationSet `agents`: one Application per `deployments/<team>/<agent>/`. |
+| `charts/agent/` | The values-file chart: renders one agent's AgentTemplate, Agent, and registration ConfigMap. `values.schema.json` is the contract. See [../deployments/README.md](../deployments/README.md). |
+| `argocd-values.yaml` | Argo CD chart values (no Dex, no notifications). |
 | `kind-config.yaml` | kagent's own kind config from the pinned release, unchanged. |
 | `kagent-values.yaml` | kagent chart values. Points the model at the gateway. |
 | `gateway.yaml` | The Gateway, the OpenCode Go backend, and the `/v1` route. |
