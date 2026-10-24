@@ -1,0 +1,19 @@
+== check 3: which Secrets hold the GitHub token (token length 93, never printed)
+holds token: agentgateway-system/github-mcp-token
+== Secrets in team namespaces
+team-platform/docs-agent-agent-key
+team-platform/hello-agent-agent-key
+team-platform/kagent-openai
+team-platform/triage-agent-agent-key
+team-platform/verify-55-agent-key
+== RemoteMCPServer headersFrom in team namespaces
+team-platform/hello-agent-demo-mcp [{"name":"x-agent-key","valueFrom":{"key":"OPENAI_API_KEY","name":"hello-agent-agent-key","type":"Secret"}}]
+team-platform/hello-agent-github-mcp [{"name":"x-agent-key","valueFrom":{"key":"OPENAI_API_KEY","name":"hello-agent-agent-key","type":"Secret"}}]
+team-platform/triage-agent-github-mcp [{"name":"x-agent-key","valueFrom":{"key":"OPENAI_API_KEY","name":"triage-agent-agent-key","type":"Secret"}}]
+team-platform/verify-55-github-mcp [{"name":"x-agent-key","valueFrom":{"key":"OPENAI_API_KEY","name":"verify-55-agent-key","type":"Secret"}}]
+== kagent database dump searched for the token
+dump bytes:  11025309
+token hits in kagent db: 0
+github-mcp-token name hits in kagent db: 4
+== control: the search finds the token in agentgateway-system/github-mcp-token
+1

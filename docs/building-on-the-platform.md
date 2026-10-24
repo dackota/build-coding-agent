@@ -1,11 +1,14 @@
 # Building on the platform
 
-How to add your own agents, tools, and models to the cluster `make up` builds.
+How a team builds on the cluster `make up` builds, and how the platform team extends it.
+To ship an agent, read the [dev guide](dev-guide.md) first. The [guard rails](guard-rails.md)
+say what stays fixed.
 
 **To ship an agent, write a values file**, not kagent YAML:
 `deployments/<team>/<agent>/values.yaml`, deployed by Argo CD into `team-<team>`. See
-[../deployments/README.md](../deployments/README.md). Recipes 1 and 2 below are values files.
-The other recipes show the kagent objects underneath. They are platform changes: the team
+[../deployments/README.md](../deployments/README.md). Recipes 1 and 2 below are values files, and so are the `tools` and `subagents` lines of
+recipes 3 and 6. Recipes 4, 5 and 7 and the sections after them are for the platform team:
+they show the kagent objects underneath, and a team does not write them. They are platform changes: the team
 base in `platform/charts/teams/` (every team namespace gets its own copy) or the catalog in
 `platform/charts/agent/`. A team cannot apply them: its Argo CD project allows only the
 kinds the values-file chart renders.

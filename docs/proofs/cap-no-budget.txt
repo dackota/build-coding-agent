@@ -1,0 +1,7 @@
+{"time":"2026-10-24T17:57:00.715Z","event":"registration-skipped","why":"team-payments/nobudget-registration: team payments has no budget in the budgets file, so agent nobudget gets no key and no cap"}
+{"time":"2026-10-24T17:57:00.730Z","event":"run-done","teams":["platform","payments"],"budgeted":["platform"],"changes":1}
+--- Secrets in team-payments:
+secret/kagent-openai
+--- key entries/caps mentioning payments:
+0
+0

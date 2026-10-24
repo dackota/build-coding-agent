@@ -1,0 +1,10 @@
+folder pushed: 2026-10-24T16:27:42Z
+now: 2026-10-24T16:31:02Z
+created registration 2026-10-24T16:30:23Z
+created secret 2026-10-24T16:31:00Z
+labels {"agents.build-coding-agent.dev/agent":"verify-53","agents.build-coding-agent.dev/agent-key":"true","app.kubernetes.io/managed-by":"minter"}
+annotations {"agents.build-coding-agent.dev/key-hash":"sha256:43777b8d2cc710724dfd6958656862515272653c7a5650b8936fd0cb6e021ed9"}
+data keys: OPENAI_API_KEY 
+hash entry:
+{"keyHash":"sha256:43777b8d2cc710724dfd6958656862515272653c7a5650b8936fd0cb6e021ed9","metadata":{"team":"platform","agent":"verify-53"}}
+agent Ready=True

@@ -1,0 +1,47 @@
+== verify-53 (key length 43, never printed)
+control: key in its own Secret: 1
+actor templates compiled:  lines with env/config
+env OPENAI_API_KEY value in compiled env: kagent-credential-injected*8
+absent from actor env/config (form len 43)
+absent from actor env/config (form len 60)
+absent from actor env/config (form len 86)
+kagent database dump bytes: 745516
+absent from kagent database
+absent from kagent database
+absent from kagent database
+log bytes searched (worker, minter, agentgateway): 950948
+absent from logs
+== hello-agent (key length 43, never printed)
+control: key in its own Secret: 1
+actor templates compiled:  lines with env/config
+env OPENAI_API_KEY value in compiled env: kagent-credential-injected*@
+absent from actor env/config (form len 43)
+absent from actor env/config (form len 60)
+absent from actor env/config (form len 86)
+kagent database dump bytes: 745516
+absent from kagent database
+absent from kagent database
+absent from kagent database
+log bytes searched (worker, minter, agentgateway): 950948
+absent from logs
+verify-53: compiled actor template strings bytes 2246; runtime config present: ; config names apiKeySecret value? 
+hello-agent: compiled actor template strings bytes 7480; runtime config present: ; config names apiKeySecret value? 
+verify-53: runtime config (KAGENT_CONFIG_JSON) present in compiled template: yes
+hello-agent: runtime config (KAGENT_CONFIG_JSON) present in compiled template: yes
+== recheck with the system grep (command grep), not the shell's grep function
+verify-53 control: the search finds the key in the key itself
+verify-53 absent from actor env/config
+verify-53 absent from kagent db
+verify-53 absent from actor env/config
+verify-53 absent from kagent db
+verify-53 absent from actor env/config
+verify-53 absent from kagent db
+verify-53 env OPENAI_API_KEY=kagent-credential-injected8
+hello-agent control: the search finds the key in the key itself
+hello-agent absent from actor env/config
+hello-agent absent from kagent db
+hello-agent absent from actor env/config
+hello-agent absent from kagent db
+hello-agent absent from actor env/config
+hello-agent absent from kagent db
+hello-agent env OPENAI_API_KEY=kagent-credential-injected

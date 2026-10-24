@@ -1,0 +1,7 @@
+# agent capprobe (team platform) has tokenCap 60 in its registration; each call uses about 27-48 tokens
+call 1 -> HTTP 200 {"model":"glm-5.3-flash","usage":{"prompt_tokens":18,"completion_tokens":13,"total_tokens":31,"compl
+call 2 -> HTTP 200 {"model":"glm-5.3-flash","usage":{"prompt_tokens":18,"completion_tokens":30,"total_tokens":48,"compl
+call 3 -> HTTP 429 
+call 4 -> HTTP 429 
+agw_agent_platform.capprobe_1791072000
+agw_team_platform_1791072000

@@ -10,7 +10,7 @@ _Avoid_: custom agent, BYO harness
 
 **Harness**:
 The kagent resource that says which image runs an agent and on which Substrate worker pool.
-_Avoid_: runtime, deployment
+_Avoid_: runtime, deployment (`runtime` is only the values-file field that picks `stock`, `coding` or `byo`; the kagent object is the Harness)
 
 **AgentTemplate**:
 The kagent resource that holds an agent's model, system prompt, MCP tool bindings, and subagents.
@@ -51,6 +51,10 @@ _Avoid_: team defaults, shared config
 **Values file**:
 One agent's `deployments/<team>/<agent>/values.yaml`, checked against the strict schema of `platform/charts/agent`. Its `runtime` field (`stock`, `coding`, `byo`) picks how the agent runs; the kagent object is still called the Harness.
 _Avoid_: agent YAML, manifest
+
+**Catalog tool**:
+A tool a values file names in `tools` (`github-read`, `github-write`, `demo-delete-branch`). The catalog (`agent.catalog` in `platform/charts/agent/templates/_helpers.tpl`) maps each name to an MCP server behind agentgateway, its tool list, and whether it needs approval. A write tool always does.
+_Avoid_: plugin, integration
 
 **Registration**:
 The ConfigMap `<agent>-registration` the values-file chart renders next to the agent: team, agent, owner, model, token cap, MCP tool names, and GitHub repos (`githubRepos`, from `github.repos`), for the platform to read.

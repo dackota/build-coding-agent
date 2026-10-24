@@ -1,0 +1,25 @@
+$ kubectl --context kind-build-coding-agent get ns agents
+Error from server (NotFound): namespaces "agents" not found
+exit 1
+$ kubectl --context kind-build-coding-agent -n team-platform get agents.kagent.dev
+error: the server doesn't have a resource type "agents"
+$ argo applications
+N                       REV            SYNC     H         AT
+platform-docs-agent     verify/52-r1   Synced   Healthy   2234218281ba4a47b96476c99c65df238df242db
+platform-hello-agent    verify/52-r1   Synced   Healthy   2234218281ba4a47b96476c99c65df238df242db
+platform-triage-agent   verify/52-r1   Synced   Healthy   2234218281ba4a47b96476c99c65df238df242db
+$ kubectl --context kind-build-coding-agent -n team-platform get agents.kagent.dev
+error: the server doesn't have a resource type "agents"
+agents                                                 api.kagent.dev/v1alpha3           true         Agent
+agenttemplates                                         api.kagent.dev/v1alpha3           true         AgentTemplate
+egresspolicies                                         api.kagent.dev/v1alpha3           true         EgressPolicy
+harnesses                                              api.kagent.dev/v1alpha3           true         Harness
+modelconfigs                        mc                 api.kagent.dev/v1alpha3           true         ModelConfig
+modelproviderconfigs                mprov              api.kagent.dev/v1alpha3           true         ModelProviderConfig
+remotemcpservers                    rmcps              api.kagent.dev/v1alpha3           true         RemoteMCPServer
+sandboxtemplates                                       api.kagent.dev/v1alpha3           true         SandboxTemplate
+$ kubectl --context kind-build-coding-agent -n team-platform get agents.api.kagent.dev
+NAME           READY   AGE
+docs-agent     True    177m
+hello-agent    True    178m
+triage-agent   True    178m

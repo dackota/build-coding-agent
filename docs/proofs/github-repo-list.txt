@@ -1,0 +1,93 @@
+
+## unlisted repo: push_files dackota/agent-golden-path
+> POST http://127.0.0.1:55823/mcp/github  x-agent-key: <hello-agent key>
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"push_files","arguments":{"owner":"dackota","repo":"agent-golden-path","branch":"main","message":"must be refused","files":[{"path":"x.txt","content":"x"}]}}}
+HTTP/1.1 400 Bad Request
+content-type: application/json
+content-length: 85
+date: Sat, 24 Oct 2026 22:21:10 GMT
+
+{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"Unknown tool: push_files"}}
+
+## unlisted owner: push_files evil-owner/test-repo
+> POST http://127.0.0.1:55823/mcp/github  x-agent-key: <hello-agent key>
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"push_files","arguments":{"owner":"evil-owner","repo":"test-repo","branch":"main","message":"must be refused","files":[{"path":"x.txt","content":"x"}]}}}
+HTTP/1.1 400 Bad Request
+content-type: application/json
+content-length: 85
+date: Sat, 24 Oct 2026 22:21:10 GMT
+
+{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"Unknown tool: push_files"}}
+
+## unlisted repo: create_branch dackota/agent-golden-path
+> POST http://127.0.0.1:55823/mcp/github  x-agent-key: <hello-agent key>
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_branch","arguments":{"owner":"dackota","repo":"agent-golden-path","branch":"verify-56-r1"}}}
+HTTP/1.1 400 Bad Request
+content-type: application/json
+content-length: 88
+date: Sat, 24 Oct 2026 22:21:10 GMT
+
+{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"Unknown tool: create_branch"}}
+
+## unlisted repo: create_pull_request dackota/agent-golden-path
+> POST http://127.0.0.1:55823/mcp/github  x-agent-key: <hello-agent key>
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_pull_request","arguments":{"owner":"dackota","repo":"agent-golden-path","title":"x","head":"a","base":"main"}}}
+HTTP/1.1 400 Bad Request
+content-type: application/json
+content-length: 94
+date: Sat, 24 Oct 2026 22:21:10 GMT
+
+{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"Unknown tool: create_pull_request"}}
+
+## case differs from the list: push_files Dackota/Test-Repo (compared as written, refused)
+> POST http://127.0.0.1:55823/mcp/github  x-agent-key: <hello-agent key>
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"push_files","arguments":{"owner":"Dackota","repo":"Test-Repo","branch":"verify-56-r1","message":"must be refused","files":[{"path":"x.txt","content":"x"}]}}}
+HTTP/1.1 400 Bad Request
+content-type: application/json
+content-length: 85
+date: Sat, 24 Oct 2026 22:21:11 GMT
+
+{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"Unknown tool: push_files"}}
+
+## duplicate key, unlisted last: {repo:test-repo, repo:agent-golden-path} (rule reads last, refused)
+> POST http://127.0.0.1:55823/mcp/github  x-agent-key: <hello-agent key>
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"push_files","arguments":{"owner":"dackota","repo":"test-repo","repo":"agent-golden-path","branch":"verify-56-r1","message":"must be refused","files":[{"path":"x.txt","content":"x"}]}}}
+HTTP/1.1 400 Bad Request
+content-type: application/json
+content-length: 85
+date: Sat, 24 Oct 2026 22:21:11 GMT
+
+{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"Unknown tool: push_files"}}
+
+## duplicate key, listed last: {repo:agent-golden-path, repo:test-repo} (allowed; branch verify-56-r1 exists only on test-repo, so success means the server read the last value too)
+> POST http://127.0.0.1:55823/mcp/github  x-agent-key: <hello-agent key>
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"push_files","arguments":{"owner":"dackota","repo":"agent-golden-path","repo":"test-repo","branch":"verify-56-r1","message":"verify 56-r1: duplicate repo key, listed last","files":[{"path":"verify-56-r1-dup.txt","content":"duplicate key check\n"}]}}}
+HTTP/1.1 200 OK
+content-type: text/event-stream
+cache-control: no-cache
+transfer-encoding: chunked
+date: Sat, 24 Oct 2026 22:21:13 GMT
+
+event: message
+data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"ref\":\"refs/heads/verify-56-r1\",\"url\":\"https://api.github.com/repos/dackota/test-repo/git/refs/heads/verify-56-r1\",\"object\":{\"type\":\"commit\",\"sha\":\"765bff5883b9bdd9a0feb68bd26a73b544075553\",\"url\":\"https://api.github.com/repos/dackota/test-repo/git/commits/76
+## missing owner: push_files {repo:test-repo} (refused)
+> POST http://127.0.0.1:55823/mcp/github  x-agent-key: <hello-agent key>
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"push_files","arguments":{"repo":"test-repo","branch":"verify-56-r1","message":"must be refused","files":[{"path":"x.txt","content":"x"}]}}}
+HTTP/1.1 400 Bad Request
+content-type: application/json
+content-length: 85
+date: Sat, 24 Oct 2026 22:21:13 GMT
+
+{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"Unknown tool: push_files"}}
+
+## listed repo read tool still works: issue_read dackota/test-repo #1
+> POST http://127.0.0.1:55823/mcp/github  x-agent-key: <hello-agent key>
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"issue_read","arguments":{"method":"get","owner":"dackota","repo":"test-repo","issue_number":1}}}
+HTTP/1.1 200 OK
+content-type: text/event-stream
+cache-control: no-cache
+transfer-encoding: chunked
+date: Sat, 24 Oct 2026 22:21:13 GMT
+
+event: message
+data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"number\":1,\"title\":\"S15 git out check 16-r1\",\"state\":\"closed\",\"html_url\":\"https://github.com/dackota/test-repo/pull/1\",\"user\":{\"login\":\"dackota\",\"id\":21208005,\"profile_url\":\"https://github.com/dackota\",\"avatar_url\":\"https://avatars.githubusercontent.com/u/21208005?v=4\"},\"author_association\":\"OWNER\",\"assignees\":[],\"reactions\":{\"total_count\":0,\"+1\":0,\"-1\":0,\"laugh\":0,\"confused\":0,\"h
