@@ -233,7 +233,8 @@ Agents live in `deployments/`; Argo CD deploys them. Platform objects go in the 
 `<allowed registry>/<path>@sha256:<64 hex>` (a tag or another registry is refused), and the
 chart renders a Harness for it. Start from `templates/byo-ts`, build and push it with
 `make byo-push DIR=templates/byo-ts NAME=my-agent`, and follow
-[the byo contract](byo-contract.md).
+[the byo contract](byo-contract.md). Before you open a pull request, run
+`make byo-check IMAGE=<the line byo-push printed>`: it reports pass or fail per rule.
 
 ## What a byo image must do itself
 

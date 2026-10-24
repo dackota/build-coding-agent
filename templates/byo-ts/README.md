@@ -26,6 +26,8 @@ sides together. `agent/test/byo-starter-mirror.test.ts` fails when a copy drifts
 make byo-push DIR=templates/byo-ts NAME=my-agent   # builds, pushes, prints the image line
 ```
 
+Prove it meets the contract first: `make byo-check IMAGE=<the address@sha256 digest it printed>`.
+
 Copy `values.example.yaml` to `deployments/<team>/<name>/values.yaml`, paste the image line,
 and open a pull request; Argo CD deploys it. Then `make chat TEAM=<team> AGENT=<name> MSG=hi`.
 
