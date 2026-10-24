@@ -24,9 +24,9 @@ smoke: ## Push an image and apply a Harness by its digest, then one message to t
 preflight: ## Check tools, versions, and OPENCODE_KEY without creating anything
 	platform/preflight.sh
 
-deploy: ## Build the agent image, push it, apply the Harness and Agent by digest (image named by the registry's kind-network address)
+deploy: ## Build and push the coding and skill images, pin them by digest in the teams release (Argo CD deploys the agents), run the MCP servers
 	platform/deploy.sh
 
-chat: ## Send one message through the kagent controller: make chat MSG="hello" [TEAM=platform AGENT=name] [FILE=path/to/file]
-	$(if $(TEAM),AGENT_NAMESPACE="team-$(TEAM)") $(if $(AGENT),AGENT="$(AGENT)") \
+chat: ## Send one message to an agent (default hello-agent of team platform): make chat MSG="hello" [TEAM=platform] [AGENT=name] [FILE=path/to/file]
+	$(if $(TEAM),TEAM="$(TEAM)") $(if $(AGENT),AGENT="$(AGENT)") \
 	pnpm --dir agent run cli -- $(if $(FILE),--file "$(FILE)") "$(MSG)"

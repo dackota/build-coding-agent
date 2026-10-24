@@ -45,7 +45,7 @@ A group that ships agents, named on the team list `platform/teams.txt`. Its agen
 _Avoid_: tenant, org
 
 **Team base**:
-The platform-owned objects in each team namespace that the team's agents resolve: WorkerPool and ServiceAccount `team-default`, `default-model-config`, and Harness `kagent-stock`. Teams cannot change it.
+The platform-owned objects in each team namespace that the team's agents resolve: WorkerPool and ServiceAccount `team-default`, `default-model-config`, Harness `kagent-stock`, Harness `coding` (pinned by `make deploy`), the subagent templates `explorer`, `executor` and `reviewer`, the catalog RemoteMCPServers, and the git and npm EgressPolicies. Teams cannot change it.
 _Avoid_: team defaults, shared config
 
 **Values file**:

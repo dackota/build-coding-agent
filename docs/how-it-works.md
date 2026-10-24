@@ -72,10 +72,12 @@ nesting is one level deep.
 - **Approval gate.** Risky `bash` commands and every bound MCP tool pause until you approve.
   The tool checks the gate again when it runs, so an unapproved call never runs.
 - **No credentials in the actor.** The model key is in agentgateway. The GitHub token is in
-  Secret `agents/github-mcp-token`, which only Substrate's egress gateway reads. The agent's
-  config and env hold a placeholder, and its logs hold neither.
+  Secret `github-mcp-token` in the agent's team namespace (`team-platform` for
+  `hello-agent`), which only Substrate's egress gateway reads. The agent's config and env hold
+  a placeholder, and its logs hold neither.
 - **Narrow egress.** The actor can reach only `github.com`, `codeload.github.com` and
-  `registry.npmjs.org` (`platform/egress.yaml`). So `git clone` works for public repos only.
+  `registry.npmjs.org` (the team base's `git-egress` and `npm-egress`). So `git clone` works
+  for public repos only.
 - **Extensions.** `protect-env` blocks file-tool writes to `.env` files. `redact-env` hides
   `.env` values from file-tool reads. They do not cover `bash`; the approval gate does.
 - **Output caps.** Each tool result is cut to 20000 characters. Old tool results are pruned

@@ -1,11 +1,9 @@
 # Substrate chart values for `kagent install` (platform/install.sh). The kagent CLI grants
 # the credential provider atespace kagent only; a values file replaces that list, so it
-# names both: kagent (the install's own) and agents (platform/agents.yaml, every agent of ours).
-# platform/teams.sh appends one entry per team namespace from platform/teams.txt, so
+# names kagent (the install's own) here, and platform/teams.sh appends one entry per team
+# namespace from platform/teams.txt (every agent lives in its team's namespace), so
 # namespacePolicies must stay the last list in this file.
 credentialProvider:
   namespacePolicies:
     - atespace: kagent
       allowedNamespaces: [kagent]
-    - atespace: agents
-      allowedNamespaces: [agents]

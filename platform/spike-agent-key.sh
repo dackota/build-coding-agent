@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Spike (ticket #60): repeat the per-agent model key checks on kind (make up first).
-# Makes a random agent key, applies platform/spike-agent-key.yaml (agent spike-key in agents,
+# Makes a random agent key, applies platform/spike-agent-key.yaml (agent spike-key in team-platform,
 # keyed model and MCP routes on agentgateway, a one-tool MCP server in spike-key), sends the
 # agent one message, prints one PASS/FAIL line per check, and removes everything (KEEP=1
 # keeps it). Spends a few hundred model tokens. Exits non-zero on any FAIL.
-# The key is held in a shell variable and Secret agents/spike-key-agent only; it is never printed.
+# The key is held in a shell variable and Secret team-platform/spike-key-agent only; it is never printed.
 set -euo pipefail
 # shellcheck source=platform/lib.sh
 . "$(dirname "$0")/lib.sh"
@@ -29,7 +29,7 @@ cleanup() {
   for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done
   [ -z "${KEEP:-}" ] || return 0
   render | k delete -f - --ignore-not-found --wait=false >/dev/null 2>&1 || true
-  k -n "$AGENTS_NS" delete secret spike-key-agent spike-key-bearer --ignore-not-found >/dev/null
+  k -n "$PLATFORM_TEAM_NS" delete secret spike-key-agent spike-key-bearer --ignore-not-found >/dev/null
 }
 trap cleanup EXIT
 
@@ -64,7 +64,7 @@ send() {
     '{jsonrpc:"2.0",id:1,method:"SendMessage",params:{message:{messageId:$id,role:"ROLE_USER",parts:[{text:$t}]}}}')"
   while :; do
     resp="$(curl -sS --max-time 180 -H 'content-type: application/json' -H 'A2A-Version: 1.0' \
-      -H 'X-User-Id: spike@build-coding-agent' -d "$body" "http://127.0.0.1:$A2A_PORT/agents/$AGENTS_NS/$AGENT" 2>&1)" || true
+      -H 'X-User-Id: spike@build-coding-agent' -d "$body" "http://127.0.0.1:$A2A_PORT/agents/$PLATFORM_TEAM_NS/$AGENT" 2>&1)" || true
     if [[ "$resp" == *TASK_STATE_COMPLETED* ]] || [ "$SECONDS" -ge "$deadline" ]; then printf '%s' "$resp"; return 0; fi
     sleep 5
   done
@@ -76,13 +76,13 @@ actor_template() {
     xxd -r -p | strings -n 4
 }
 
-printf '%s' "$KEY" | k -n "$AGENTS_NS" create secret generic spike-key-agent --from-file=OPENAI_API_KEY=/dev/stdin \
+printf '%s' "$KEY" | k -n "$PLATFORM_TEAM_NS" create secret generic spike-key-agent --from-file=OPENAI_API_KEY=/dev/stdin \
   --dry-run=client -o yaml | k apply -f - >/dev/null
-printf 'Bearer %s' "$KEY" | k -n "$AGENTS_NS" create secret generic spike-key-bearer --from-file=token=/dev/stdin \
+printf 'Bearer %s' "$KEY" | k -n "$PLATFORM_TEAM_NS" create secret generic spike-key-bearer --from-file=token=/dev/stdin \
   --dry-run=client -o yaml | k apply -f - >/dev/null
 render | k apply -f - >/dev/null
 k -n "$SPIKE_NS" rollout status deploy/spike-key-server --timeout="$READY_TIMEOUT" >/dev/null
-k -n "$AGENTS_NS" wait --for=condition=Ready "agent/$AGENT" --timeout="$READY_TIMEOUT" >/dev/null
+k -n "$PLATFORM_TEAM_NS" wait --for=condition=Ready "agent/$AGENT" --timeout="$READY_TIMEOUT" >/dev/null
 # kubectl itself, not the k function: a backgrounded function is a subshell, and killing it
 # leaves its kubectl running.
 kubectl --context "$CTX" -n "$AGW_NS" port-forward svc/agentgateway-proxy "$GW_PORT:80" >/dev/null 2>&1 &
@@ -118,7 +118,7 @@ if [ "$open" = 401 ]; then echo "FAIL the open /v1 route of the other agents now
 else echo "PASS the open /v1 route of the other agents is untouched (got $open, not 401)"; fi
 
 # 3. The key is not in the actor's env, runtime config, or logs; only the placeholder is.
-if has_key "$(k -n "$AGENTS_NS" get secret spike-key-agent -o yaml)"; then echo "PASS the key search finds the key in its Secret (control)"
+if has_key "$(k -n "$PLATFORM_TEAM_NS" get secret spike-key-agent -o yaml)"; then echo "PASS the key search finds the key in its Secret (control)"
 else echo "FAIL the key search misses the key in its own Secret"; failed=1; fi
 tmpl="$(actor_template)"
 check "actor env holds the placeholder for OPENAI_API_KEY" "kagent-credential-injected" "$(grep -A1 -x 'OPENAI_API_KEY' <<<"$tmpl" || true)"
@@ -126,16 +126,16 @@ check "actor runtime config holds an env reference for x-agent-key" '"x-agent-ke
 absent "key absent from the compiled actor env and runtime config" "$tmpl"
 absent "key absent from the whole kagent and Substrate database" \
   "$(k -n "$KAGENT_NS" exec deploy/kagent-postgresql -c postgresql -- pg_dump -U postgres --data-only kagent)"
-worker="$(k -n "$AGENTS_NS" logs deploy/agents-default --since-time="$START")"
-check "the worker logs hold the agent's actor lines" "\"ate.template.atespace\":\"agents\",\"ate.template.name\":\"$AGENT-" "$worker"
+worker="$(k -n "$PLATFORM_TEAM_NS" logs deploy/team-default --since-time="$START")"
+check "the worker logs hold the agent's actor lines" "\"ate.template.atespace\":\"$PLATFORM_TEAM_NS\",\"ate.template.name\":\"$AGENT-" "$worker"
 absent "key absent from the actor's logs (worker pod)" "$worker"
 absent "key absent from the controller's logs" "$(k -n "$KAGENT_NS" logs deploy/kagent-controller --since-time="$START")"
 absent "key absent from agentgateway's logs" "$gwlog"
 
 # 4. A second credential for the same origin and header is refused at compile time.
-k -n "$AGENTS_NS" wait --for=condition=Compatible=False agent/spike-key-conflict --timeout=60s >/dev/null || true
+k -n "$PLATFORM_TEAM_NS" wait --for=condition=Compatible=False agent/spike-key-conflict --timeout=60s >/dev/null || true
 check "Authorization twice on one origin is rejected" \
   "conflicting credentials for http://agentgateway-proxy.agentgateway-system.svc.cluster.local:80 header authorization" \
-  "$(k -n "$AGENTS_NS" get agent spike-key-conflict -o jsonpath='{.status.conditions[?(@.type=="Compatible")].message}')"
+  "$(k -n "$PLATFORM_TEAM_NS" get agent spike-key-conflict -o jsonpath='{.status.conditions[?(@.type=="Compatible")].message}')"
 
 exit "$failed"

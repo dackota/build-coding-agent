@@ -1,6 +1,11 @@
 # install.sh sets teams from platform/teams.txt and workerImage from platform/versions.env.
 teams: []
 workerImage: ""
+# make deploy sets these: the coding image (the team bases' Harness coding) and each skill's
+# image (passed to every Application), by digest on the registry's kind-network address.
+images:
+  coding: ""
+  skills: {}
 argocdNamespace: argocd
 gitops:
   repoURL: https://github.com/dackota/build-coding-agent.git

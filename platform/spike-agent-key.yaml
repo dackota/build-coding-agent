@@ -3,13 +3,13 @@
 # platform/spike-agent-key.sh; nothing here is part of `make up`.
 # The script fills @NODE_IMAGE@ (platform/versions.env) and @KEY_HASH@ (sha256 hex of the key
 # it makes). The key itself is never in this file: the script puts it in Secret
-# agents/spike-key-agent from stdin.
+# team-platform/spike-key-agent from stdin.
 #
 # Where things live:
 #   spike-key            the fake MCP server (one tool, spike_echo)
 #   agentgateway-system  the API-key ConfigMap, the keyed model and MCP routes, their policies
-#   agents               the agent, its ModelConfig and RemoteMCPServers (Substrate's credential
-#                        provider may read Secrets in agents only: platform/substrate-values.yaml)
+#   team-platform        the agent, its ModelConfig and RemoteMCPServers (Substrate's credential
+#                        provider may read Secrets in team namespaces: platform/teams.sh)
 apiVersion: v1
 kind: Namespace
 metadata: {name: spike-key}
@@ -202,7 +202,7 @@ spec:
 # The actor gets the placeholder; Substrate's egress gateway puts the Secret's key in.
 apiVersion: api.kagent.dev/v1alpha3
 kind: ModelConfig
-metadata: {name: spike-key, namespace: agents}
+metadata: {name: spike-key, namespace: team-platform}
 spec:
   provider: OpenAI
   model: glm-5.3-flash
@@ -217,7 +217,7 @@ spec:
 # origin with another header, so no conflict.
 apiVersion: api.kagent.dev/v1alpha3
 kind: RemoteMCPServer
-metadata: {name: spike-key-mcp, namespace: agents}
+metadata: {name: spike-key-mcp, namespace: team-platform}
 spec:
   description: spike tool through agentgateway, keyed by the agent's own key
   protocol: STREAMABLE_HTTP
@@ -228,7 +228,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
-metadata: {name: spike-key, namespace: agents}
+metadata: {name: spike-key, namespace: team-platform}
 spec:
   description: spike agent with its own agentgateway key
   modelConfig: {name: spike-key}
@@ -240,7 +240,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
-metadata: {name: spike-key, namespace: agents}
+metadata: {name: spike-key, namespace: team-platform}
 spec:
   template:
     ref: {name: spike-key}
@@ -250,7 +250,7 @@ spec:
 # Secret spike-key-bearer ("Bearer <key>"), beside the model's binding.
 apiVersion: api.kagent.dev/v1alpha3
 kind: RemoteMCPServer
-metadata: {name: spike-key-mcp-bearer, namespace: agents}
+metadata: {name: spike-key-mcp-bearer, namespace: team-platform}
 spec:
   description: spike tool, keyed by Authorization (conflict probe)
   protocol: STREAMABLE_HTTP
@@ -261,7 +261,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
-metadata: {name: spike-key-conflict, namespace: agents}
+metadata: {name: spike-key-conflict, namespace: team-platform}
 spec:
   description: conflict probe, two credentials on one origin and header
   modelConfig: {name: spike-key}
@@ -273,7 +273,7 @@ spec:
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
-metadata: {name: spike-key-conflict, namespace: agents}
+metadata: {name: spike-key-conflict, namespace: team-platform}
 spec:
   template:
     ref: {name: spike-key-conflict}

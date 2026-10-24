@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Install the platform on the kind cluster: Agent Substrate and kagent (through the
 # pinned kagent CLI, the install path kagent 1.x documents), agentgateway with the
-# OpenCode Go key Secret, kagent's stock agent, Argo CD, and the teams of
-# platform/teams.txt (charts/teams). Usage: [GITOPS_REVISION=<branch>] install.sh
+# OpenCode Go key Secret, Argo CD, and the teams of platform/teams.txt (charts/teams), whose
+# agents Argo CD deploys from deployments/. Usage: [GITOPS_REVISION=<branch>] install.sh
 # Every chart's registry digest is checked against platform/versions.env first.
 # The key goes from .env to kubectl on stdin; it is never printed, written to a file,
 # or put on a command line.
@@ -17,6 +17,8 @@ CLI_CONFIG="$BIN_DIR/kagent-cli.yaml"
 PINS_VALUES="$BIN_DIR/kagent-pins.yaml"
 # platform/substrate-values.yaml plus a namespace policy per team (platform/teams.sh).
 SUBSTRATE_VALUES="$BIN_DIR/substrate-values.yaml"
+# The namespace every agent lived in before the teams; make up deletes it.
+LEGACY_AGENTS_NS="agents"
 # kagent's chart makes Secret kagent-openai from this; the gateway ignores it.
 PLACEHOLDER_KEY="not-used-agentgateway-holds-the-key"
 
@@ -150,13 +152,15 @@ make_key_secret() {
   echo "Secret $AGW_NS/$KEY_SECRET made from $KEY_NAME"
 }
 
-apply_gateway_and_agent() {
+apply_gateway() {
   k apply -f "$PLATFORM_DIR/gateway.yaml"
   k wait --for=condition=Programmed gateway/agentgateway-proxy -n "$AGW_NS" --timeout="$READY_TIMEOUT"
-  # The namespace agents with its WorkerPool and ModelConfig, before any agent in it.
-  sed "s|@SUBSTRATE_WORKER_IMAGE@|$SUBSTRATE_WORKER_IMAGE|" "$PLATFORM_DIR/agents.yaml" | k apply -f -
-  k apply -f "$PLATFORM_DIR/stock-agent.yaml"
-  k wait --for=condition=Ready agent/stock-agent -n "$AGENTS_NS" --timeout="$READY_TIMEOUT"
+}
+
+# Before the teams, every agent of ours shared one namespace (LEGACY_AGENTS_NS), from hand-written YAML.
+# They are values files in team-platform now; a cluster built before the move loses the old one.
+remove_legacy_agents_namespace() {
+  k delete namespace "$LEGACY_AGENTS_NS" --ignore-not-found --timeout="$READY_TIMEOUT"
 }
 
 install_argocd() {
@@ -172,7 +176,8 @@ install_teams() {
   local names teams_json
   names="$("$TEAMS_SH" names)"
   teams_json="$(printf '%s\n' "$names" | jq -R . | jq -cs .)"
-  h upgrade --install teams "$PLATFORM_DIR/charts/teams" -n "$ARGOCD_NS" \
+  # --reset-then-reuse-values keeps the image pins make deploy set (images.*) on a rerun.
+  h upgrade --install teams "$PLATFORM_DIR/charts/teams" -n "$ARGOCD_NS" --reset-then-reuse-values \
     --set-json "teams=$teams_json" --set "workerImage=$SUBSTRATE_WORKER_IMAGE" \
     --set "argocdNamespace=$ARGOCD_NS" \
     --set "gitops.repoURL=$GITOPS_REPO_URL" --set "gitops.revision=$GITOPS_REVISION" \
@@ -189,7 +194,8 @@ write_cli_files
 install_substrate_and_kagent
 install_gateway
 make_key_secret
-apply_gateway_and_agent
+apply_gateway
+remove_legacy_agents_namespace
 install_argocd
 install_teams
 echo "platform is up on $CTX; total time ${SECONDS}s"

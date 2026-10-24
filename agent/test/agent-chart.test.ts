@@ -51,12 +51,10 @@ describe("agent chart: stock runtime", () => {
     expect(r.output).toMatch(/runtime/);
   });
 
-  it("refuses to render coding and byo in this release", () => {
-    for (const runtime of ["coding", "byo"]) {
-      const r = renderValues({ ...STOCK, runtime });
-      expect(r.ok, runtime).toBe(false);
-      expect(r.output).toMatch(new RegExp(`runtime ${runtime} is not supported yet`));
-    }
+  it("refuses to render byo in this release", () => {
+    const r = renderValues({ ...STOCK, runtime: "byo" });
+    expect(r.ok).toBe(false);
+    expect(r.output).toMatch(/runtime byo is not supported yet/);
   });
 
   it("refuses a values file whose team is not the namespace's team", () => {
@@ -119,5 +117,119 @@ describe("agent chart: schema negative cases", () => {
     const r = renderValues(without(STOCK, "owner"));
     expect(r.ok).toBe(false);
     expect(r.output).toMatch(/owner/);
+  });
+});
+
+const CODING = { ...STOCK, runtime: "coding", description: "A coding agent" };
+const SKILL_IMAGE = `172.18.0.3:5000/docs-skill@sha256:${"a".repeat(64)}`;
+/** What the ApplicationSet adds to every Application: the platform's pinned skill images. */
+const PLATFORM = { platform: { skillImages: { "docs-style": SKILL_IMAGE } } };
+
+describe("agent chart: coding runtime", () => {
+  it("renders a coding agent on the team base's coding Harness with git and npm egress", () => {
+    const r = renderValues(CODING);
+    expect(r.ok, r.output).toBe(true);
+    expect(r.objects.map((o) => `${o.kind}/${o.metadata.name}`).sort()).toEqual(["Agent/tracer", "AgentTemplate/tracer", "ConfigMap/tracer-registration"]);
+    const agent = find(r.objects, "Agent", "tracer", NS)!;
+    expect(agent.spec).toEqual({
+      template: { ref: { name: "tracer" } },
+      harnessRef: { name: "coding" },
+      egressPolicyRefs: [{ name: "git-egress" }, { name: "npm-egress" }],
+    });
+    expect(find(r.objects, "ConfigMap", "tracer-registration", NS)!.data.runtime).toBe("coding");
+  });
+
+  it("rejects coding with no system prompt", () => {
+    const r = renderValues(without(CODING, "systemPrompt"));
+    expect(r.ok).toBe(false);
+    expect(r.output).toMatch(/systemPrompt/);
+  });
+
+  it("renders subagents by name as subAgent tools on the team base templates", () => {
+    const r = renderValues({ ...CODING, subagents: ["explorer", "executor", "reviewer"] });
+    expect(r.ok, r.output).toBe(true);
+    const tools = find(r.objects, "AgentTemplate", "tracer", NS)!.spec.tools as { subAgent: { name: string; description: string; templateRef: { name: string } } }[];
+    expect(tools.map((t) => [t.subAgent.name, t.subAgent.templateRef.name])).toEqual([
+      ["explorer", "explorer-template"],
+      ["executor", "executor-template"],
+      ["reviewer", "reviewer-template"],
+    ]);
+    for (const t of tools) expect(t.subAgent.description, t.subAgent.name).not.toBe("");
+  });
+
+  it("renders catalog tools by name: github-read with no approval, github-write and demo-delete-branch with approval", () => {
+    const r = renderValues({ ...STOCK, tools: ["github-read", "github-write", "demo-delete-branch"] });
+    expect(r.ok, r.output).toBe(true);
+    expect(find(r.objects, "AgentTemplate", "tracer", NS)!.spec.tools).toEqual([
+      { mcp: { server: { kind: "RemoteMCPServer", name: "github-mcp" }, tools: ["issue_read"] } },
+      { mcp: { server: { kind: "RemoteMCPServer", name: "github-mcp" }, tools: ["create_branch", "push_files", "create_pull_request"], requireApproval: true } },
+      { mcp: { server: { kind: "RemoteMCPServer", name: "demo-mcp" }, tools: ["delete_branch"], requireApproval: true } },
+    ]);
+  });
+
+  it("a read tool may ask for approval", () => {
+    const r = renderValues({ ...STOCK, tools: [{ name: "github-read", requireApproval: true }] });
+    expect(r.ok, r.output).toBe(true);
+    expect(find(r.objects, "AgentTemplate", "tracer", NS)!.spec.tools).toEqual([
+      { mcp: { server: { kind: "RemoteMCPServer", name: "github-mcp" }, tools: ["issue_read"], requireApproval: true } },
+    ]);
+  });
+
+  it("a write tool gets approval forced on", () => {
+    const r = renderValues({ ...STOCK, tools: [{ name: "github-write" }] });
+    expect(r.ok, r.output).toBe(true);
+    expect(find(r.objects, "AgentTemplate", "tracer", NS)!.spec.tools[0].mcp.requireApproval).toBe(true);
+  });
+
+  it("a write tool cannot turn approval off", () => {
+    for (const name of ["github-write", "demo-delete-branch"]) {
+      const r = renderValues({ ...STOCK, tools: [{ name, requireApproval: false }] });
+      expect(r.ok, name).toBe(false);
+      expect(r.output, name).toMatch(/requireApproval/);
+    }
+  });
+
+  // The rejection must come from the catalog's name list, not from some other rule, so
+  // the test reads the allowed names out of helm's schema error at the tool's path.
+  it("rejects an unknown catalog tool", () => {
+    const cases = [
+      { tools: ["github-admin"], path: "/tools/0" },
+      { tools: [{ name: "github-admin" }], path: "/tools/0/name" },
+    ];
+    for (const { tools, path } of cases) {
+      const r = renderValues({ ...STOCK, tools });
+      expect(r.ok, JSON.stringify(tools)).toBe(false);
+      expect(r.output, JSON.stringify(tools)).toContain(`at '${path}': value must be one of 'github-read', 'github-write', 'demo-delete-branch'`);
+    }
+  });
+
+  it("rejects an unknown subagent name", () => {
+    const r = renderValues({ ...CODING, subagents: ["planner"] });
+    expect(r.ok).toBe(false);
+    expect(r.output).toContain("at '/subagents/0': value must be one of 'explorer', 'executor', 'reviewer'");
+  });
+
+  it("rejects an agent named like a team base subagent template", () => {
+    const r = renderValues({ ...CODING, name: "explorer-template" }, "explorer-template");
+    expect(r.ok).toBe(false);
+    expect(r.output).toMatch(/name/);
+  });
+
+  it("renders a skill from the platform's pinned skill image", () => {
+    const r = render(AGENT_CHART, "tracer", NS, [valuesFile({ ...CODING, skills: ["docs-style"] }), valuesFile(PLATFORM)]);
+    expect(r.ok, r.output).toBe(true);
+    expect(find(r.objects, "AgentTemplate", "tracer", NS)!.spec.skills).toEqual([{ name: "docs-style", source: { oci: SKILL_IMAGE } }]);
+  });
+
+  it("fails when a skill has no platform image yet", () => {
+    const r = renderValues({ ...CODING, skills: ["docs-style"] });
+    expect(r.ok).toBe(false);
+    expect(r.output).toMatch(/docs-style.*make deploy/);
+  });
+
+  it("rejects an unknown skill", () => {
+    const r = render(AGENT_CHART, "tracer", NS, [valuesFile({ ...CODING, skills: ["evil"] }), valuesFile(PLATFORM)]);
+    expect(r.ok).toBe(false);
+    expect(r.output).toMatch(/skills/);
   });
 });

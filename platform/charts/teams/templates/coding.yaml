@@ -1,0 +1,120 @@
+{{- /*
+The rest of each team's base: what the values-file chart's runtime coding, subagents and
+catalog tools resolve in the agent's own namespace. The coding Harness renders once make
+deploy has built the coding image and pinned it here by digest (images.coding).
+*/ -}}
+{{- $gatewayV1 := "http://agentgateway-proxy.agentgateway-system.svc.cluster.local/v1" }}
+{{- range $team := .Values.teams }}
+{{- $ns := printf "team-%s" $team }}
+{{- with $.Values.images.coding }}
+---
+# The platform's coding agent (agent/), built and pinned by make deploy.
+apiVersion: api.kagent.dev/v1alpha3
+kind: Harness
+metadata:
+  name: coding
+  namespace: {{ $ns }}
+spec:
+  byo: {}
+  workload:
+    image: {{ . | quote }}
+    command: ["node", "/app/src/main.ts"]
+  substrate:
+    workerPoolRef: {name: team-default}
+    snapshotPolicy:
+      location: gs://ate-snapshots/kagent/
+{{- end }}
+{{- /* The subagents' own models, all through agentgateway: a cheap one to explore, a stronger one to execute and to review. */}}
+{{- range $sub, $model := dict "explorer" "glm-5.3-flash" "executor" "glm-5.1" "reviewer" "glm-5.1" }}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata:
+  name: {{ $sub }}-model-config
+  namespace: {{ $ns }}
+spec:
+  provider: OpenAI
+  model: {{ $model }}
+  openAI:
+    apiFormat: chatCompletions
+    baseUrl: {{ $gatewayV1 }}
+{{- end }}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: explorer-template
+  namespace: {{ $ns }}
+spec:
+  description: Read-only explorer subagent
+  modelConfig: {name: explorer-model-config}
+  systemPrompt: You explore the workspace with read_file and search, and answer with what you found. You cannot change files. Be brief.
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: executor-template
+  namespace: {{ $ns }}
+spec:
+  description: Executor subagent with full file tools
+  modelConfig: {name: executor-model-config}
+  systemPrompt: You carry out the job you are given with the file tools (read_file, write_file, edit_file, search). Read a file before editing it. Reply with a one-line summary of what you changed.
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: reviewer-template
+  namespace: {{ $ns }}
+spec:
+  description: Read-only reviewer subagent
+  modelConfig: {name: reviewer-model-config}
+  systemPrompt: You review a change with read_file and search, and reply with only the JSON the job asks for. You cannot change files. Report only real problems, each with a severity, the file and one sentence of reason.
+---
+# Catalog tools github-read and github-write. github-mcp-server wants a GitHub token on every
+# request; Secret github-mcp-token in this namespace (make deploy, from GITHUB_TOKEN, value
+# "Bearer <token>") is added by Substrate's egress gateway as the request leaves the actor,
+# so the token is never in the actor or its config.
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: github-mcp
+  namespace: {{ $ns }}
+spec:
+  description: GitHub through github-mcp-server; the egress gateway adds the token
+  protocol: STREAMABLE_HTTP
+  url: http://github-mcp.github-mcp.svc.cluster.local:8080/
+  headersFrom:
+    - name: Authorization
+      valueFrom: {type: Secret, name: github-mcp-token, key: token}
+---
+# Catalog tool demo-delete-branch: a demo server whose one tool deletes nothing (platform/demo-mcp.yaml).
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: demo-mcp
+  namespace: {{ $ns }}
+spec:
+  description: Demo MCP server with one destructive-looking tool, for the requireApproval check
+  protocol: STREAMABLE_HTTP
+  url: http://demo-mcp.demo-mcp.svc.cluster.local:8080/mcp
+---
+# git over HTTPS by DNS name, no credential: the actor holds none, so only public repos clone.
+apiVersion: api.kagent.dev/v1alpha3
+kind: EgressPolicy
+metadata:
+  name: git-egress
+  namespace: {{ $ns }}
+spec:
+  destinations:
+    - origin: https://github.com
+    - origin: https://codeload.github.com
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: EgressPolicy
+metadata:
+  name: npm-egress
+  namespace: {{ $ns }}
+spec:
+  destinations:
+    - origin: https://registry.npmjs.org
+{{- end }}

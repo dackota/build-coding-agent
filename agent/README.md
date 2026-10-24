@@ -72,7 +72,7 @@ Other: `src/log.ts` writes one JSON line per event. Never pass it config, env, o
 
 ## Settings
 
-Set these on the Harness (`platform/agent.yaml.tmpl`, `spec.workload`) or in tests.
+Set these on the team base's Harness `coding` (`platform/charts/teams/templates/coding.yaml`, `spec.workload`) or in tests.
 
 | Variable | Default | What it sets |
 |---|---|---|

@@ -56,8 +56,8 @@ In `platform/spike-agent-key.yaml`:
   its Secret holds the whole value. So model and MCP can never share `Authorization` on one
   origin. Use `x-agent-key` (or any other header) on every MCP route.
 - **The credential grant.** Substrate's credential provider reads Secrets only in the
-  namespaces `platform/substrate-values.yaml` grants each atespace. `agents` and every team in
-  `platform/teams.txt` are granted, so a key Secret must live in the agent's own namespace.
+  namespaces `platform/substrate-values.yaml` grants each atespace. Every team in
+  `platform/teams.txt` is granted, so a key Secret must live in the agent's own namespace.
 - **The open `/v1` route stays open in this spike.** The spike keys its own paths
   (`/spike-key/v1`, `/spike-key/mcp`). Making `/v1` Strict refuses every agent that still has
   the shared placeholder key (`kagent-openai`), so the minter ticket switches it only once
@@ -85,7 +85,7 @@ platform/spike-agent-key.sh
 ```
 
 It makes a random key, applies `platform/spike-agent-key.yaml` (agent `spike-key` and the
-conflict probe `spike-key-conflict` in `agents`, the keyed routes and the API-key ConfigMap in
+conflict probe `spike-key-conflict` in `team-platform`, the keyed routes and the API-key ConfigMap in
 `agentgateway-system`, a one-tool MCP server in namespace `spike-key`), port-forwards the
 Gateway on `18090` and the controller on `18091` (`SPIKE_PORT`, `SPIKE_A2A_PORT`), prints one
 `PASS` or `FAIL` line per check, and removes it all (`KEEP=1` keeps it). It exits non-zero on

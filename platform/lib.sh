@@ -19,9 +19,10 @@ MAIN_CHECKOUT="$(dirname "$(git -C "$ROOT" rev-parse --path-format=absolute --gi
 ENV_FILE="${ENV_FILE:-$MAIN_CHECKOUT/.env}"
 KEY_NAME="OPENCODE_KEY"
 
-# kagent's own install (the controller); every agent of ours lives in AGENTS_NS (platform/agents.yaml).
+# kagent's own install (the controller). Every agent lives in its team's namespace,
+# team-<team>; the platform team's own agents (deployments/platform/) in PLATFORM_TEAM_NS.
 KAGENT_NS="kagent"
-AGENTS_NS="agents"
+PLATFORM_TEAM_NS="team-platform"
 GITHUB_MCP_NS="github-mcp"
 SUBSTRATE_NS="ate-system"
 AGW_NS="agentgateway-system"

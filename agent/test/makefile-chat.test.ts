@@ -36,9 +36,16 @@ it("make chat TEAM=platform AGENT=x talks to agent x in team-platform", async ()
   expect(controller.paths[0]).toBe("/agents/team-platform/tracer");
 });
 
-it("plain make chat still talks to hello-agent in namespace agents", async () => {
+it("plain make chat still talks to hello-agent, now in team-platform", async () => {
   const controller = await recordingController();
   await makeChat(controller.url, []);
   controller.close();
-  expect(controller.paths[0]).toBe("/agents/agents/hello-agent");
+  expect(controller.paths[0]).toBe("/agents/team-platform/hello-agent");
+});
+
+it("make chat AGENT=x alone talks to agent x in team-platform", async () => {
+  const controller = await recordingController();
+  await makeChat(controller.url, ["AGENT=docs-agent"]);
+  controller.close();
+  expect(controller.paths[0]).toBe("/agents/team-platform/docs-agent");
 });

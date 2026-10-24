@@ -1,6 +1,10 @@
 {{- include "agent.check" . -}}
-# stock: kagent's built-in runtime on the team base's Harness kagent-stock, which runs on
-# the team's WorkerPool.
+# stock: kagent's built-in runtime on the team base's Harness kagent-stock. coding: the
+# platform's coding agent on the team base's Harness coding (its image pinned by make
+# deploy), with git and npm egress. Both run on the team's WorkerPool.
+{{- $isCoding := eq .Values.runtime "coding" }}
+{{- $tools := include "agent.tools" . }}
+{{- $skills := include "agent.skills" . }}
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
 metadata:
@@ -13,6 +17,14 @@ spec:
   modelConfig:
     name: {{ include "agent.modelConfig" . }}
   systemPrompt: {{ .Values.systemPrompt | quote }}
+  {{- if $skills }}
+  skills:
+    {{- $skills | trim | nindent 4 }}
+  {{- end }}
+  {{- if $tools }}
+  tools:
+    {{- $tools | trim | nindent 4 }}
+  {{- end }}
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
@@ -26,4 +38,9 @@ spec:
     ref:
       name: {{ .Values.name }}
   harnessRef:
-    name: kagent-stock
+    name: {{ ternary "coding" "kagent-stock" $isCoding }}
+  {{- if $isCoding }}
+  egressPolicyRefs:
+    - name: git-egress
+    - name: npm-egress
+  {{- end }}

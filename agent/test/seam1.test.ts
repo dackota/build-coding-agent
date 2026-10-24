@@ -63,8 +63,9 @@ it("never sends, logs, or stores a model key", async () => {
   }
   expect(agent.output()).not.toContain(KEY_SENTINEL);
   expect(readFileSync(configPath, "utf8")).not.toContain(KEY_SENTINEL);
-  const template = readFileSync(join(AGENT_DIR, "..", "platform", "agent.yaml.tmpl"), "utf8");
-  expect(template).not.toMatch(/OPENCODE_KEY|apiKey|api_key/i);
+  for (const file of [["platform", "charts", "teams", "templates", "coding.yaml"], ["deployments", "platform", "hello-agent", "values.yaml"]]) {
+    expect(readFileSync(join(AGENT_DIR, "..", ...file), "utf8"), file.join("/")).not.toMatch(/OPENCODE_KEY|apiKey|api_key/i);
+  }
 });
 
 it("accepts a gRPC connection as soon as /readyz answers, and replies once the heavy imports finish", async () => {

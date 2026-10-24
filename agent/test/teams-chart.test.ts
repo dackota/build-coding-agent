@@ -62,7 +62,7 @@ describe("teams chart", () => {
       repoURL: REPO,
       targetRevision: "main",
       path: "platform/charts/agent",
-      helm: { releaseName: "{{.path.basename}}", valueFiles: ["../../../{{.path.path}}/values.yaml"] },
+      helm: { releaseName: "{{.path.basename}}", valueFiles: ["../../../{{.path.path}}/values.yaml"], valuesObject: { platform: { skillImages: {} } } },
     });
     expect(tpl.spec.destination).toEqual({ server: "https://kubernetes.default.svc", namespace: "team-{{index .path.segments 1}}" });
   });
@@ -81,6 +81,62 @@ describe("teams chart", () => {
     const set = r.objects.find((o) => o.kind === "ApplicationSet")!;
     expect(set.spec.generators[0].git.revision).toBe("try/my-agent");
     expect(set.spec.template.spec.source.targetRevision).toBe("try/my-agent");
+  });
+
+  it("renders the subagent templates, catalog RemoteMCPServers and git and npm EgressPolicies in each team base", () => {
+    const r = renderTeams();
+    expect(r.ok, r.output).toBe(true);
+    for (const team of ["platform", "payments"]) {
+      const ns = `team-${team}`;
+      for (const sub of ["explorer", "executor", "reviewer"]) {
+        const template = find(r.objects, "AgentTemplate", `${sub}-template`, ns)!;
+        expect(template, `${ns} ${sub}`).toBeDefined();
+        expect(template.spec.systemPrompt, `${ns} ${sub}`).toBeTruthy();
+        expect(find(r.objects, "ModelConfig", template.spec.modelConfig.name, ns), `${ns} ${sub} model`).toBeDefined();
+      }
+      expect(find(r.objects, "RemoteMCPServer", "github-mcp", ns)!.spec.url).toBe("http://github-mcp.github-mcp.svc.cluster.local:8080/");
+      expect(find(r.objects, "RemoteMCPServer", "github-mcp", ns)!.spec.headersFrom).toEqual([
+        { name: "Authorization", valueFrom: { type: "Secret", name: "github-mcp-token", key: "token" } },
+      ]);
+      expect(find(r.objects, "RemoteMCPServer", "demo-mcp", ns)!.spec.url).toBe("http://demo-mcp.demo-mcp.svc.cluster.local:8080/mcp");
+      expect(find(r.objects, "EgressPolicy", "git-egress", ns)!.spec.destinations).toEqual([
+        { origin: "https://github.com" },
+        { origin: "https://codeload.github.com" },
+      ]);
+      expect(find(r.objects, "EgressPolicy", "npm-egress", ns)!.spec.destinations).toEqual([{ origin: "https://registry.npmjs.org" }]);
+    }
+  });
+
+  it("renders no coding Harness until make deploy pins the image", () => {
+    const r = renderTeams();
+    expect(r.ok, r.output).toBe(true);
+    expect(r.objects.filter((o) => o.kind === "Harness" && o.metadata.name === "coding")).toEqual([]);
+  });
+
+  it("renders the coding Harness by digest once make deploy pins it", () => {
+    const image = `172.18.0.3:5000/hello-agent@sha256:${"b".repeat(64)}`;
+    const r = renderTeams({ ...VALUES, images: { coding: image, skills: {} } });
+    expect(r.ok, r.output).toBe(true);
+    for (const ns of ["team-platform", "team-payments"]) {
+      const harness = find(r.objects, "Harness", "coding", ns)!;
+      expect(harness.spec.byo).toEqual({});
+      expect(harness.spec.workload).toEqual({ image, command: ["node", "/app/src/main.ts"] });
+      expect(harness.spec.substrate.workerPoolRef).toEqual({ name: "team-default" });
+    }
+  });
+
+  it("rejects a coding image that is not pinned by digest", () => {
+    const r = renderTeams({ ...VALUES, images: { coding: "172.18.0.3:5000/hello-agent:latest", skills: {} } });
+    expect(r.ok).toBe(false);
+    expect(r.output).toMatch(/coding/);
+  });
+
+  it("passes the platform's skill images to every Application", () => {
+    const skill = `172.18.0.3:5000/docs-skill@sha256:${"c".repeat(64)}`;
+    const r = renderTeams({ ...VALUES, images: { coding: "", skills: { "docs-style": skill } } });
+    expect(r.ok, r.output).toBe(true);
+    const set = r.objects.find((o) => o.kind === "ApplicationSet")!;
+    expect(set.spec.template.spec.source.helm.valuesObject).toEqual({ platform: { skillImages: { "docs-style": skill } } });
   });
 
   it("rejects a team name in the wrong format", () => {

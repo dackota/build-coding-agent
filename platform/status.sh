@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Report each platform part on the kind cluster: one ok or FAIL line for Substrate,
 # kagent, agentgateway, Argo CD and its ApplicationSet, each team's base (platform/teams.txt),
-# each of our agents (in namespace agents), and the image pins. Exits non-zero when any
+# the platform team's agents (in team-platform, from deployments/platform/), and the image pins. Exits non-zero when any
 # line is FAIL. Reads Secret names only, never their data.
 set -euo pipefail
 # shellcheck source=platform/lib.sh
@@ -69,10 +69,10 @@ check_gateway() {
 
 check_agent() {
   local name="$1" ready
-  ready="$(k get agent "$name" -n "$AGENTS_NS" \
+  ready="$(k get agent "$name" -n "$PLATFORM_TEAM_NS" \
     -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}' 2>&1 || true)"
-  if [ "$ready" = True ]; then pass "agent $AGENTS_NS/$name Ready"
-  else flunk "agent $AGENTS_NS/$name not Ready (saw: $(first_line "$ready"))"; fi
+  if [ "$ready" = True ]; then pass "agent $PLATFORM_TEAM_NS/$name Ready"
+  else flunk "agent $PLATFORM_TEAM_NS/$name not Ready (saw: $(first_line "$ready"))"; fi
 }
 
 # The ApplicationSet that deploys deployments/<team>/<agent>/, and the revision it tracks.
@@ -113,7 +113,7 @@ check_team_base() {
 IMAGE_IDS='{range .items[*].status.containerStatuses[*]}{.imageID}{"\n"}{end}{range .items[*].status.initContainerStatuses[*]}{.imageID}{"\n"}{end}'
 check_images() {
   local ns out ids="" id strays="" team namespaces
-  namespaces=("$KAGENT_NS" "$AGENTS_NS" "$SUBSTRATE_NS" "$PODCERT_NS" "$AGW_NS" "$DEMO_MCP_NS" "$GITHUB_MCP_NS" "$ARGOCD_NS")
+  namespaces=("$KAGENT_NS" "$SUBSTRATE_NS" "$PODCERT_NS" "$AGW_NS" "$DEMO_MCP_NS" "$GITHUB_MCP_NS" "$ARGOCD_NS")
   for team in $team_names; do namespaces+=("team-$team"); done
   for ns in "${namespaces[@]}"; do
     # shellcheck disable=SC2310  # wrapper: k is one kubectl call
@@ -144,7 +144,6 @@ if ! team_names="$("$TEAMS_SH" names 2>&1)"; then
   team_names=""
 fi
 for team in $team_names; do check_team_base "$team"; done
-check_agent stock-agent
 check_agent triage-agent
 check_agent docs-agent
 check_agent hello-agent

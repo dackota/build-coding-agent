@@ -42,14 +42,13 @@ describe("teams.sh", () => {
     expect(r.code).not.toBe(0);
   });
 
-  it("writes Substrate namespace policies for kagent, agents and every team", () => {
+  it("writes Substrate namespace policies for kagent and every team", () => {
     const r = teamsSh(teamsFile("platform\npayments\n"), "substrate-values");
     expect(r.code, r.stderr).toBe(0);
     expect(parse(r.stdout)).toEqual({
       credentialProvider: {
         namespacePolicies: [
           { atespace: "kagent", allowedNamespaces: ["kagent"] },
-          { atespace: "agents", allowedNamespaces: ["agents"] },
           { atespace: "team-platform", allowedNamespaces: ["team-platform"] },
           { atespace: "team-payments", allowedNamespaces: ["team-payments"] },
         ],

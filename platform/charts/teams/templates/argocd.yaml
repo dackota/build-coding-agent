@@ -56,6 +56,10 @@ spec:
           releaseName: '{{`{{.path.basename}}`}}'
           valueFiles:
             - '{{`../../../{{.path.path}}/values.yaml`}}'
+          # The platform's pinned skill images (make deploy); they override the values file.
+          valuesObject:
+            platform:
+              skillImages: {{ .Values.images.skills | toJson }}
       destination:
         server: {{ $cluster }}
         namespace: '{{`team-{{index .path.segments 1}}`}}'
