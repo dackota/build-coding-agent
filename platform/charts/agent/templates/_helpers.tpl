@@ -73,10 +73,12 @@ reviewer: {template: reviewer-template, description: Read-only reviewer that che
 {{- end }}
 {{- end -}}
 
-{{/* The team base's ModelConfig for each platform model name. */}}
+{{/* The agent's own ModelConfig, and the key Secret the platform's minter writes for it. */}}
 {{- define "agent.modelConfig" -}}
-{{- $configs := dict "glm-5.3-flash" "default-model-config" -}}
-{{- get $configs .Values.model -}}
+{{- printf "%s-model" .Values.name -}}
+{{- end -}}
+{{- define "agent.keySecret" -}}
+{{- printf "%s-agent-key" .Values.name -}}
 {{- end -}}
 
 {{- define "agent.labels" -}}
