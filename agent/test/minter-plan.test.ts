@@ -13,6 +13,10 @@ const GOOD_TOOLS = ["issue_read", "create_branch", "push_files", "create_pull_re
 // Names a rule must never carry: they could break out of the CEL string or the list.
 const BAD_TOOLS = ["", "Issue_Read", 'x" || true || "', "a b", "t".repeat(65), "1tool", "x]"];
 const EMPTY: Current = { secrets: [], hashes: [], policies: [] };
+const GOOD_REPOS = ["dackota/test-repo", "acme/.github", "a/b", "Org-1/Repo_2.js", `${"o".repeat(39)}/${"r".repeat(100)}`];
+// Entries a rule must never carry: not owner/name, or able to break out of the CEL string.
+const BAD_REPOS = ["", "dackota", "dackota/", "/repo", "a/b/c", "a b/c", 'a"/b', 'a/b" || true || "', "-lead/x", "a/..", "a/.", `${"o".repeat(40)}/r`, `o/${"r".repeat(101)}`, "https://github.com/a/b"];
+const ARGS = "json(request.body).params.arguments";
 
 const sha = (text: string) => `sha256:${createHash("sha256").update(text).digest("hex")}`;
 const id = (team: string, agent: string) => `${team}/${agent}`;
@@ -26,6 +30,8 @@ function keyMaker(): () => string {
 
 /** The tools a registration's policy should name: its well-formed tool names, each once, sorted. */
 const allowedTools = (r: Registration) => [...new Set(r.tools.filter((t) => GOOD_TOOLS.includes(t)))].sort();
+/** The repos a registration's policy should name: its well-formed owner/name entries, each once, sorted. */
+const allowedRepos = (r: Registration) => [...new Set((r.repos ?? []).filter((x) => GOOD_REPOS.includes(x)))].sort();
 
 /** What the cluster looks like once the changes are applied: Secrets by namespace/name, hash entries and tool policies by name. */
 function applyModel(current: Current, changes: readonly Change[]): Current {
@@ -60,7 +66,8 @@ function applyModel(current: Current, changes: readonly Change[]): Current {
 const teamArb = fc.oneof({ weight: 4, arbitrary: fc.constantFrom(...KNOWN_TEAMS) }, { weight: 1, arbitrary: fc.constantFrom(...UNKNOWN_TEAMS) });
 const agentArb = fc.oneof({ weight: 4, arbitrary: fc.constantFrom(...GOOD_AGENTS) }, { weight: 1, arbitrary: fc.constantFrom(...BAD_AGENTS) });
 const toolArb = fc.oneof({ weight: 4, arbitrary: fc.constantFrom(...GOOD_TOOLS) }, { weight: 1, arbitrary: fc.constantFrom(...BAD_TOOLS) });
-const registrationArb: fc.Arbitrary<Registration> = fc.record({ team: teamArb, agent: agentArb, tools: fc.array(toolArb, { maxLength: 8 }) });
+const repoArb = fc.oneof({ weight: 3, arbitrary: fc.constantFrom(...GOOD_REPOS) }, { weight: 1, arbitrary: fc.constantFrom(...BAD_REPOS) });
+const registrationArb: fc.Arbitrary<Registration> = fc.record({ team: teamArb, agent: agentArb, tools: fc.array(toolArb, { maxLength: 8 }), repos: fc.array(repoArb, { maxLength: 6 }) });
 // Large lists and duplicates: the agent pool is small, so a long list repeats entries.
 const registrationsArb = fc.array(registrationArb, { maxLength: 300 });
 
@@ -123,8 +130,24 @@ describe("minter plan: properties", () => {
           const policies = after.policies.filter((p) => p.team === r.team && p.agent === r.agent);
           expect(policies, id(r.team, r.agent)).toHaveLength(1);
           expect(policies[0]!.name).toBe(`mcp-tools.${r.team}.${r.agent}`);
-          expect(policies[0]!.rule).toBe(toolRule(r.team, r.agent, allowedTools(r)));
+          expect(policies[0]!.rule).toBe(toolRule(r.team, r.agent, allowedTools(r), allowedRepos(r)));
           for (const bad of BAD_TOOLS.filter((t) => t !== "")) expect(policies[0]!.rule).not.toContain(bad);
+        }
+      }),
+    );
+  });
+
+  it("a policy names only well-formed owner/name repos, and repo tools only through them", () => {
+    fc.assert(
+      fc.property(registrationsArb, (registrations) => {
+        const changes = plan(registrations, KNOWN_TEAMS, EMPTY, keyMaker());
+        const last = new Map(registrations.filter(isValid).map((r) => [id(r.team, r.agent), r]));
+        for (const r of last.values()) {
+          const put = changes.find((c): c is Extract<Change, { kind: "put-policy" }> => c.kind === "put-policy" && c.team === r.team && c.agent === r.agent)!;
+          const named = [...put.rule.matchAll(/\.owner == "([^"]*)" && json\(request\.body\)\.params\.arguments\.repo == "([^"]*)"/g)].map((m) => `${m[1]}/${m[2]}`);
+          const hasRepoTools = allowedTools(r).some((t) => ["create_branch", "push_files", "create_pull_request"].includes(t));
+          expect(named.sort(), id(r.team, r.agent)).toEqual(hasRepoTools ? allowedRepos(r) : []);
+          for (const bad of BAD_REPOS.filter((x) => x.includes('"'))) expect(put.rule).not.toContain(bad);
         }
       }),
     );
@@ -214,6 +237,39 @@ describe("minter plan: examples", () => {
     expect(toolRule("platform", "quiet", [])).toBe('apiKey.team == "platform" && apiKey.agent == "quiet" && mcp.tool.name in []');
   });
 
+  it("renders a repo rule: GitHub write tools are called only on listed repos", () => {
+    const tools = ["create_branch", "create_pull_request", "delete_branch", "issue_read", "push_files"];
+    expect(toolRule("platform", "hello-agent", tools, ["acme/widgets", "dackota/test-repo"])).toBe(
+      'apiKey.team == "platform" && apiKey.agent == "hello-agent" && (mcp.tool.name in ["delete_branch", "issue_read"]' +
+        ' || (mcp.tool.name in ["create_branch", "create_pull_request", "push_files"] && (json(request.body).method != "tools/call"' +
+        ` || (${ARGS}.owner == "acme" && ${ARGS}.repo == "widgets") || (${ARGS}.owner == "dackota" && ${ARGS}.repo == "test-repo"))))`,
+    );
+    // Only write tools: no read-tool branch.
+    expect(toolRule("platform", "pusher", ["push_files"], ["a/b"])).toBe(
+      `apiKey.team == "platform" && apiKey.agent == "pusher" && (mcp.tool.name in ["push_files"] && (json(request.body).method != "tools/call" || (${ARGS}.owner == "a" && ${ARGS}.repo == "b")))`,
+    );
+    // A repo list with no write tools changes nothing.
+    expect(toolRule("platform", "triage-agent", ["issue_read"], ["a/b"])).toBe('apiKey.team == "platform" && apiKey.agent == "triage-agent" && mcp.tool.name in ["issue_read"]');
+  });
+
+  it("an agent with GitHub write tools and no repo list gets a rule that refuses every write call", () => {
+    const [policy] = plan([{ team: "platform", agent: "pusher", tools: ["issue_read", "push_files", "create_branch", "create_pull_request"] }], KNOWN_TEAMS, EMPTY, keyMaker()).filter((c) => c.kind === "put-policy");
+    expect(policy).toEqual({
+      kind: "put-policy",
+      name: "mcp-tools.platform.pusher",
+      team: "platform",
+      agent: "pusher",
+      rule:
+        'apiKey.team == "platform" && apiKey.agent == "pusher" && (mcp.tool.name in ["issue_read"]' +
+        ' || (mcp.tool.name in ["create_branch", "create_pull_request", "push_files"] && (json(request.body).method != "tools/call" || false)))',
+    });
+    // Bad entries are dropped, so a list of only bad entries is no list.
+    const [junk] = plan([{ team: "platform", agent: "pusher", tools: ["push_files"], repos: BAD_REPOS }], KNOWN_TEAMS, EMPTY, keyMaker()).filter((c) => c.kind === "put-policy");
+    expect((junk as Extract<Change, { kind: "put-policy" }>).rule).toBe(
+      'apiKey.team == "platform" && apiKey.agent == "pusher" && (mcp.tool.name in ["push_files"] && (json(request.body).method != "tools/call" || false))',
+    );
+  });
+
   it("writes the policy before the key's hash, and rewrites a policy whose tools changed", () => {
     const changes = plan([{ team: "platform", agent: "hello-agent", tools: ["push_files", "create_branch", "push_files", "Bad"] }], KNOWN_TEAMS, EMPTY, keyMaker());
     expect(changes.map((c) => c.kind)).toEqual(["put-secret", "put-policy", "set-hash"]);
@@ -222,7 +278,7 @@ describe("minter plan: examples", () => {
       name: "mcp-tools.platform.hello-agent",
       team: "platform",
       agent: "hello-agent",
-      rule: 'apiKey.team == "platform" && apiKey.agent == "hello-agent" && mcp.tool.name in ["create_branch", "push_files"]',
+      rule: `apiKey.team == "platform" && apiKey.agent == "hello-agent" && (mcp.tool.name in ["create_branch", "push_files"] && (json(request.body).method != "tools/call" || false))`,
     });
     const after = applyModel(EMPTY, changes);
     expect(plan([{ team: "platform", agent: "hello-agent", tools: ["issue_read"] }], KNOWN_TEAMS, after, keyMaker())).toEqual([

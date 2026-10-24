@@ -43,6 +43,13 @@ describe("platform team agents", () => {
     expect(JSON.parse(registration.data.mcpTools as string)).toContain("issue_read");
   });
 
+  it("hello-agent lists dackota/test-repo, the repo /implement works on", () => {
+    const r = render(AGENT_CHART, "hello-agent", NS, [valuesOf("hello-agent"), PLATFORM_VALUES]);
+    expect(r.ok, r.output).toBe(true);
+    const registration = find(r.objects, "ConfigMap", "hello-agent-registration", NS)!;
+    expect(JSON.parse(registration.data.githubRepos as string)).toEqual(["dackota/test-repo"]);
+  });
+
   it("docs-agent runs on coding with its docs-style skill and the explorer subagent", () => {
     const { template, agent } = renderAgent("docs-agent");
     expect(agent.spec.harnessRef).toEqual({ name: "coding" });

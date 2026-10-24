@@ -30,8 +30,8 @@ function keyMaker(): () => string {
   return () => `fake-key-${++n}`;
 }
 
-function register(kube: FakeKube, team: string, agent: string, dataTeam = team, mcpTools = '["issue_read"]'): void {
-  kube.seedConfigMap(`team-${team}`, `${agent}-registration`, REGISTRATION, { team: dataTeam, agent, owner: "o", runtime: "stock", model: "glm-5.3-flash", tokenCap: "1000", mcpTools });
+function register(kube: FakeKube, team: string, agent: string, dataTeam = team, mcpTools = '["issue_read"]', extra: Record<string, string> = {}): void {
+  kube.seedConfigMap(`team-${team}`, `${agent}-registration`, REGISTRATION, { team: dataTeam, agent, owner: "o", runtime: "stock", model: "glm-5.3-flash", tokenCap: "1000", mcpTools, ...extra });
 }
 
 function cluster(): FakeKube {
@@ -112,13 +112,44 @@ describe("minter adapter", () => {
       name: "mcp-tools.platform.hello-agent",
       labels: POLICY_LABELS("platform", "hello-agent"),
       targetRefs: TARGETS,
-      matchExpressions: ['apiKey.team == "platform" && apiKey.agent == "hello-agent" && mcp.tool.name in ["create_branch", "create_pull_request", "delete_branch", "push_files"]'],
+      // No githubRepos: the write tools are listed but every call of one is refused.
+      matchExpressions: [
+        'apiKey.team == "platform" && apiKey.agent == "hello-agent" && (mcp.tool.name in ["delete_branch"]' +
+          ' || (mcp.tool.name in ["create_branch", "create_pull_request", "push_files"] && (json(request.body).method != "tools/call" || false)))',
+      ],
     });
     expect(kube.policy("agentgateway-system", "mcp-tools.payments.pay-bot")!.matchExpressions).toEqual([
       'apiKey.team == "payments" && apiKey.agent == "pay-bot" && mcp.tool.name in ["issue_read"]',
     ]);
     // A registration whose tool list cannot be read gets a policy that allows nothing.
     expect(kube.policy("agentgateway-system", "mcp-tools.payments.quiet")!.matchExpressions).toEqual(['apiKey.team == "payments" && apiKey.agent == "quiet" && mcp.tool.name in []']);
+  });
+
+  it("a registration's github repos go into its tool policy's rule", async () => {
+    const kube = cluster();
+    register(kube, "platform", "hello-agent", "platform", '["issue_read","push_files"]', { githubRepos: '["dackota/test-repo","not a repo"]' });
+
+    await runOnce(kube, CONFIG, keyMaker());
+
+    const args = "json(request.body).params.arguments";
+    expect(kube.policy("agentgateway-system", "mcp-tools.platform.hello-agent")!.matchExpressions).toEqual([
+      'apiKey.team == "platform" && apiKey.agent == "hello-agent" && (mcp.tool.name in ["issue_read"]' +
+        ` || (mcp.tool.name in ["push_files"] && (json(request.body).method != "tools/call" || (${args}.owner == "dackota" && ${args}.repo == "test-repo"))))`,
+    ]);
+  });
+
+  it("a registration with write tools and no readable repo list gets a rule that refuses every write call", async () => {
+    const kube = cluster();
+    register(kube, "platform", "no-list", "platform", '["push_files"]');
+    register(kube, "platform", "bad-list", "platform", '["push_files"]', { githubRepos: "not json" });
+
+    await runOnce(kube, CONFIG, keyMaker());
+
+    for (const agent of ["no-list", "bad-list"]) {
+      expect(kube.policy("agentgateway-system", `mcp-tools.platform.${agent}`)!.matchExpressions).toEqual([
+        `apiKey.team == "platform" && apiKey.agent == "${agent}" && (mcp.tool.name in ["push_files"] && (json(request.body).method != "tools/call" || false))`,
+      ]);
+    }
   });
 
   it("rewrites a minter policy someone changed by hand, and leaves policies it does not own alone", async () => {
