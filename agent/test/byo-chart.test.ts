@@ -56,6 +56,7 @@ describe("agent chart: byo runtime", () => {
       model: "glm-5.3-flash",
       tokenCap: "1000000",
       mcpTools: '["issue_read","create_branch","push_files","create_pull_request"]',
+      githubRepos: "[]",
     });
   });
 

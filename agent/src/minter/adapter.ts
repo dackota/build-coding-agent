@@ -30,8 +30,11 @@ const POLICY_SELECTOR = `${MANAGED_BY_LABEL}=minter,${MCP_TOOLS_LABEL}=true`;
 
 const backendRefs = (config: MinterConfig): TargetRef[] => config.mcp.backends.map((name) => ({ group: "agentgateway.dev", kind: "AgentgatewayBackend", name }));
 
-/** The registration's MCP tool names (data mcpTools, a JSON list); anything else reads as none, which hides every tool. */
-function parseTools(raw: string | undefined): string[] {
+/**
+ * A JSON list of strings in registration data: mcpTools (anything else reads as none, which
+ * hides every tool) or githubRepos (none: no repo tool call passes).
+ */
+function parseStrings(raw: string | undefined): string[] {
   try {
     const parsed: unknown = JSON.parse(raw ?? "[]");
     return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
@@ -108,7 +111,7 @@ export async function readState(kube: KubeClient, config: MinterConfig): Promise
         continue;
       }
       const tokenCap = /^[1-9][0-9]*$/.test(cm.data.tokenCap ?? "") ? Number(cm.data.tokenCap) : undefined;
-      registrations.push({ team, agent, tools: parseTools(cm.data.mcpTools), tokenCap });
+      registrations.push({ team, agent, tools: parseStrings(cm.data.mcpTools), repos: parseStrings(cm.data.githubRepos), tokenCap });
       if (config.budgets === undefined) continue;
       if (config.budgets[team] === undefined) skipped.push(`${namespace}/${cm.name}: team ${team} has no budget in the budgets file, so agent ${agent} gets no key and no cap`);
       else if (tokenCap === undefined) skipped.push(`${namespace}/${cm.name}: tokenCap ${JSON.stringify(cm.data.tokenCap ?? "")} is not a whole number of tokens, so agent ${agent} gets no key and no cap`);

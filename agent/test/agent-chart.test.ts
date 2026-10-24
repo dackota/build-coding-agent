@@ -2,6 +2,7 @@
 // Argo CD renders it per agent folder with the folder's name as the release name and
 // team-<team> as the namespace; these tests render it the same way.
 import { describe, expect, it } from "vitest";
+import { REPO_TOOLS } from "../src/minter/plan.ts";
 import { AGENT_CHART, find, render, valuesFile } from "./chart-helpers.ts";
 
 const STOCK = {
@@ -42,7 +43,7 @@ describe("agent chart: stock runtime", () => {
 
     const registration = find(r.objects, "ConfigMap", "tracer-registration", NS)!;
     expect(registration.metadata.labels?.["agents.build-coding-agent.dev/registration"]).toBe("true");
-    expect(registration.data).toEqual({ team: "platform", agent: "tracer", owner: "dackota", runtime: "stock", model: "glm-5.3-flash", tokenCap: "1000000", mcpTools: "[]" });
+    expect(registration.data).toEqual({ team: "platform", agent: "tracer", owner: "dackota", runtime: "stock", model: "glm-5.3-flash", tokenCap: "1000000", mcpTools: "[]", githubRepos: "[]" });
   });
 
   it("the registration lists the MCP tool names of the agent's catalog tools", () => {
@@ -275,5 +276,42 @@ describe("agent chart: coding runtime", () => {
     const r = render(AGENT_CHART, "tracer", NS, [valuesFile({ ...CODING, skills: ["evil"] }), valuesFile(PLATFORM)]);
     expect(r.ok).toBe(false);
     expect(r.output).toMatch(/skills/);
+  });
+});
+
+describe("agent chart: github repos", () => {
+  const registrationOf = (r: ReturnType<typeof renderValues>) => find(r.objects, "ConfigMap", "tracer-registration", NS)!;
+
+  it("accepts owner/name entries and lists them in the registration", () => {
+    const repos = ["dackota/test-repo", "acme/.github", "Org-1/Repo_2.js", `${"o".repeat(39)}/${"r".repeat(100)}`];
+    const r = renderValues({ ...STOCK, tools: ["github-write"], github: { repos } });
+    expect(r.ok, r.output).toBe(true);
+    expect(JSON.parse(registrationOf(r).data.githubRepos)).toEqual(repos);
+  });
+
+  it("rejects a repo entry that is not owner/name", () => {
+    const bad = ["", "dackota", "dackota/", "/repo", "a/b/c", "a b/c", 'a"/b', "-lead/x", "a/..", "a/.", `${"o".repeat(40)}/r`, `o/${"r".repeat(101)}`, "https://github.com/a/b"];
+    for (const repo of bad) {
+      const r = renderValues({ ...STOCK, github: { repos: [repo] } });
+      expect(r.ok, JSON.stringify(repo)).toBe(false);
+      expect(r.output, JSON.stringify(repo)).toContain("at '/github/repos/0'");
+    }
+  });
+
+  it("rejects an unknown field under github, and a repo listed twice", () => {
+    const unknown = renderValues({ ...STOCK, github: { repos: [], token: "x" } });
+    expect(unknown.ok).toBe(false);
+    expect(unknown.output).toMatch(/token/);
+    const twice = renderValues({ ...STOCK, github: { repos: ["a/b", "a/b"] } });
+    expect(twice.ok).toBe(false);
+    expect(twice.output).toMatch(/github\/repos/);
+  });
+
+  it("every github-write tool is one the minter scopes to the repo list", () => {
+    const r = renderValues({ ...STOCK, tools: ["github-write"] });
+    expect(r.ok, r.output).toBe(true);
+    const writeTools = JSON.parse(registrationOf(r).data.mcpTools) as string[];
+    expect(writeTools.length).toBeGreaterThan(0);
+    for (const t of writeTools) expect(REPO_TOOLS, t).toContain(t);
   });
 });

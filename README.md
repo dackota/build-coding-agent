@@ -14,7 +14,8 @@ You need Docker, kind v0.32.0, kubectl, Helm 3 or 4, jq, curl, shasum, git, Node
 
 1. Copy `.env.example` to `.env` in the main checkout (worktrees share it).
 2. Set `OPENCODE_KEY` (the model key) and `GITHUB_TOKEN` (a fine-grained token for the
-   repos the agent may push to).
+   repos the agent may push to; each agent is held to its own `github.repos` list at the
+   gateway).
 3. Run:
 
 ```sh

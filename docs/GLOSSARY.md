@@ -53,7 +53,7 @@ One agent's `deployments/<team>/<agent>/values.yaml`, checked against the strict
 _Avoid_: agent YAML, manifest
 
 **Registration**:
-The ConfigMap `<agent>-registration` the values-file chart renders next to the agent: team, agent, owner, model, and token cap, for the platform to read.
+The ConfigMap `<agent>-registration` the values-file chart renders next to the agent: team, agent, owner, model, token cap, MCP tool names, and GitHub repos (`githubRepos`, from `github.repos`), for the platform to read.
 _Avoid_: agent record
 
 **Token cap**:
@@ -61,7 +61,7 @@ A monthly limit on model tokens, enforced at agentgateway through Envoy's `ratel
 _Avoid_: quota, spend limit
 
 **Minter**:
-The platform's CronJob in `platform-system` (`agent/src/minter/`) that runs every minute, reads the registrations of every listed team, and gives each agent its own agent key, token cap and MCP tool policy at agentgateway; it removes all three when the agent's registration is gone. Its pure core is `plan()`.
+The platform's CronJob in `platform-system` (`agent/src/minter/`) that runs every minute, reads the registrations of every listed team, and gives each agent its own agent key, token cap and MCP tool policy at agentgateway (its tools, with GitHub write calls held to its repo list); it removes all three when the agent's registration is gone. Its pure core is `plan()`.
 _Avoid_: key operator, provisioner
 
 **Agent key**:
