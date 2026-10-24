@@ -7,6 +7,6 @@ COPY package.json pnpm-lock.yaml ./
 RUN corepack enable && corepack install -g "$(node -p 'require("./package.json").packageManager')" && pnpm install --frozen-lockfile --prod
 COPY src ./src
 
-# Explicit entrypoint: the Harness sets no command, so this is what runs. The contract is
+# Explicit entrypoint: values.example.yaml gives the Harness the same command. The contract is
 # A2A over gRPC on 0.0.0.0:80 and /readyz on 8081 (docs/byo-contract.md).
 ENTRYPOINT ["node", "/app/src/main.ts"]
