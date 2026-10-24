@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down status smoke preflight deploy chat
+.PHONY: help up down status smoke preflight deploy chat byo-push
 
 help: ## List the targets
 	@grep -E '^[a-z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "%-8s %s\n", $$1, $$2}'
@@ -30,3 +30,6 @@ deploy: ## Build and push the coding and skill images, pin them by digest in the
 chat: ## Send one message to an agent (default hello-agent of team platform): make chat MSG="hello" [TEAM=platform] [AGENT=name] [FILE=path/to/file]
 	$(if $(TEAM),TEAM="$(TEAM)") $(if $(AGENT),AGENT="$(AGENT)") \
 	pnpm --dir agent run cli -- $(if $(FILE),--file "$(FILE)") "$(MSG)"
+
+byo-push: ## Build a byo image and push it to the local registry; prints the image line for a values file: make byo-push DIR=templates/byo-ts NAME=my-agent
+	platform/byo-push.sh "$(DIR)" "$(NAME)"

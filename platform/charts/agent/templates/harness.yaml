@@ -1,0 +1,20 @@
+{{- include "agent.check" . -}}
+{{- if eq .Values.runtime "byo" }}
+# runtime byo: the team's own image, by digest, on the team's WorkerPool. The image's own
+# entrypoint runs it (docs/byo-contract.md); the Agent's harnessRef names this Harness.
+apiVersion: api.kagent.dev/v1alpha3
+kind: Harness
+metadata:
+  name: {{ .Values.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agent.labels" . | nindent 4 }}
+spec:
+  byo: {}
+  workload:
+    image: {{ .Values.image | quote }}
+  substrate:
+    workerPoolRef: {name: team-default}
+    snapshotPolicy:
+      location: gs://ate-snapshots/kagent/
+{{- end }}

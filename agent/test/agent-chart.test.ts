@@ -67,12 +67,6 @@ describe("agent chart: stock runtime", () => {
     expect(r.output).toMatch(/runtime/);
   });
 
-  it("refuses to render byo in this release", () => {
-    const r = renderValues({ ...STOCK, runtime: "byo" });
-    expect(r.ok).toBe(false);
-    expect(r.output).toMatch(/runtime byo is not supported yet/);
-  });
-
   it("refuses a values file whose team is not the namespace's team", () => {
     const r = renderValues(STOCK, "tracer", "team-payments");
     expect(r.ok).toBe(false);

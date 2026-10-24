@@ -5,7 +5,7 @@ The words this repo uses, and the words to avoid for each.
 ## Platform
 
 **byo agent**:
-A kagent agent that runs our own image ("bring your own") instead of kagent's built-in runtime. Ours is in `agent/`.
+An agent that runs an image the team brings ("bring your own") instead of kagent's built-in runtime: `runtime: byo` in a values file, with the image pinned by digest. It must follow [the byo contract](byo-contract.md); start from `templates/byo-ts`. The platform's own coding agent (`agent/`) is also a byo image of this kind.
 _Avoid_: custom agent, BYO harness
 
 **Harness**:

@@ -1,6 +1,6 @@
 {{/*
 Guards the schema cannot express: the agent lands in its own team's namespace under its
-folder's name, and only the runtimes this release renders.
+folder's name.
 */}}
 {{- define "agent.check" -}}
 {{- $ns := printf "team-%s" .Values.team -}}
@@ -9,9 +9,6 @@ folder's name, and only the runtimes this release renders.
 {{- end -}}
 {{- if ne .Release.Name .Values.name -}}
 {{- fail (printf "name %s must match its folder name %s" .Values.name .Release.Name) -}}
-{{- end -}}
-{{- if eq .Values.runtime "byo" -}}
-{{- fail (printf "runtime %s is not supported yet; use stock or coding" .Values.runtime) -}}
 {{- end -}}
 {{- end -}}
 
