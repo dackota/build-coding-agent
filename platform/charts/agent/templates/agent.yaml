@@ -1,8 +1,10 @@
 {{- include "agent.check" . -}}
 # stock: kagent's built-in runtime on the team base's Harness kagent-stock. coding: the
 # platform's coding agent on the team base's Harness coding (its image pinned by make
-# deploy), with git and npm egress. Both run on the team's WorkerPool.
+# deploy), with git and npm egress. byo: the team's own image on a Harness of its own
+# (harness.yaml). All run on the team's WorkerPool.
 {{- $isCoding := eq .Values.runtime "coding" }}
+{{- $isByo := eq .Values.runtime "byo" }}
 {{- $tools := include "agent.tools" . }}
 {{- $skills := include "agent.skills" . }}
 # The agent's own key: the platform's minter writes Secret <name>-agent-key in this namespace
@@ -36,7 +38,7 @@ spec:
   description: {{ .Values.description | default "" | quote }}
   modelConfig:
     name: {{ include "agent.modelConfig" . }}
-  systemPrompt: {{ .Values.systemPrompt | quote }}
+  systemPrompt: {{ .Values.systemPrompt | default "" | quote }}
   {{- if $skills }}
   skills:
     {{- $skills | trim | nindent 4 }}
@@ -58,7 +60,7 @@ spec:
     ref:
       name: {{ .Values.name }}
   harnessRef:
-    name: {{ ternary "coding" "kagent-stock" $isCoding }}
+    name: {{ if $isByo }}{{ .Values.name }}{{ else }}{{ ternary "coding" "kagent-stock" $isCoding }}{{ end }}
   {{- if $isCoding }}
   egressPolicyRefs:
     - name: git-egress

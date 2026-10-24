@@ -227,7 +227,17 @@ Agents live in `deployments/`; Argo CD deploys them. Platform objects go in the 
 (`platform/charts/teams/`), so `make up` recreates them. Pin any new image by digest in
 `platform/versions.env` and `platform/images.lock` (see [pinned-versions.md](pinned-versions.md)).
 
+## Recipe: bring your own image (byo runtime)
+
+`runtime: byo` runs your image from a values file: set `image` to
+`<allowed registry>/<path>@sha256:<64 hex>` (a tag or another registry is refused), and the
+chart renders a Harness for it. Start from `templates/byo-ts`, build and push it with
+`make byo-push DIR=templates/byo-ts NAME=my-agent`, and follow
+[the byo contract](byo-contract.md).
+
 ## What a byo image must do itself
+
+The full list of rules, with why kagent needs each, is [the byo contract](byo-contract.md).
 
 kagent passes these to a `byo` image as config only. Nothing works until the image's code
 handles it. Our `agent/` (the coding runtime's image) already does:
