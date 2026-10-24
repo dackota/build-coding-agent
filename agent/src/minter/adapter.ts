@@ -2,7 +2,7 @@
 // agentgateway's API-key ConfigMap, the minter's MCP tool policies and the token caps; hand
 // them to plan(); apply what it returns.
 import type { KubeClient, McpPolicy, TargetRef } from "./kube.ts";
-import { type Budgets, type Change, type Current, type HashEntry, type KeySecret, type LimitEntry, plan, randomKey, type Registration, teamNamespace, type ToolPolicy } from "./plan.ts";
+import { type Budgets, type Change, type Current, type HashEntry, type KeySecret, type LimitEntry, plan, randomKey, hashEntryName, limitId, type Registration, teamNamespace, type ToolPolicy } from "./plan.ts";
 
 /**
  * apiKeys: agentgateway's API-key ConfigMap. mcp: where the agents' tool policies go, and the
@@ -85,7 +85,7 @@ function parseLimits(text: string | undefined): LimitEntry[] {
   return out;
 }
 
-const limitValue = (l: LimitEntry) => (l.scope === "team" ? l.team : `${l.team}.${l.agent}`);
+const limitValue = (l: LimitEntry) => (l.scope === "team" ? l.team : hashEntryName(l.team, l.agent));
 
 /** JSON is YAML: the service reads this text as its config. Sorted, so the same caps give the same text. */
 function renderLimits(limits: readonly LimitEntry[]): string {
@@ -131,10 +131,10 @@ export async function readState(kube: KubeClient, config: MinterConfig): Promise
 async function applyLimits(kube: KubeClient, config: MinterConfig, changes: readonly Change[]): Promise<void> {
   const { rateLimit } = config;
   if (!rateLimit || !changes.some((c) => c.kind === "set-limit" || c.kind === "delete-limit")) return;
-  const held = new Map(parseLimits((await kube.getConfigMap(rateLimit.namespace, rateLimit.name)).data[RATELIMIT_FILE]).map((l) => [`${l.scope}/${l.team}/${l.agent}`, l]));
+  const held = new Map(parseLimits((await kube.getConfigMap(rateLimit.namespace, rateLimit.name)).data[RATELIMIT_FILE]).map((l) => [limitId(l), l]));
   for (const c of changes) {
-    if (c.kind === "set-limit") held.set(`${c.scope}/${c.team}/${c.agent}`, { scope: c.scope, team: c.team, agent: c.agent, tokens: c.tokens });
-    if (c.kind === "delete-limit") held.delete(`${c.scope}/${c.team}/${c.agent}`);
+    if (c.kind === "set-limit") held.set(limitId(c), { scope: c.scope, team: c.team, agent: c.agent, tokens: c.tokens });
+    if (c.kind === "delete-limit") held.delete(limitId(c));
   }
   await kube.patchConfigMapData(rateLimit.namespace, rateLimit.name, { [RATELIMIT_FILE]: renderLimits([...held.values()]) });
 }

@@ -28,7 +28,7 @@ export type Observations = {
   instruction: string;
 };
 
-const PLACEHOLDER_BEARER = "Bearer placeholder";
+export const PLACEHOLDER_BEARER = "Bearer placeholder";
 const RULE_NAMES: Record<number, string> = {
   1: "A2A over gRPC",
   2: "Bind 0.0.0.0:80",

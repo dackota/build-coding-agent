@@ -370,3 +370,10 @@ export async function cancelTask(port: number, taskId: string): Promise<number> 
   const task: any = await client.cancelTask({ tenant: "", id: taskId, metadata: undefined });
   return Number(task.status?.state);
 }
+
+/** A temp dir holding one executable, name, with the given script text; returns the dir (put it on PATH). */
+export function fakeBin(name: string, script: string): string {
+  const dir = mkdtempSync(join(tmpdir(), `fake-${name}-`));
+  writeFileSync(join(dir, name), script, { mode: 0o755 });
+  return dir;
+}

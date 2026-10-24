@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { type Change, type Current, type Registration, plan, toolRule } from "../src/minter/plan.ts";
+import { type Change, type Current, limitId, REPO_TOOLS, type Registration, plan, toolRule } from "../src/minter/plan.ts";
 
 const KNOWN_TEAMS = ["platform", "payments", "search"];
 const UNKNOWN_TEAMS = ["ghost", "", "Team-Caps", "x".repeat(30)];
@@ -145,7 +145,7 @@ describe("minter plan: properties", () => {
         for (const r of last.values()) {
           const put = changes.find((c): c is Extract<Change, { kind: "put-policy" }> => c.kind === "put-policy" && c.team === r.team && c.agent === r.agent)!;
           const named = [...put.rule.matchAll(/\.owner == "([^"]*)" && json\(request\.body\)\.params\.arguments\.repo == "([^"]*)"/g)].map((m) => `${m[1]}/${m[2]}`);
-          const hasRepoTools = allowedTools(r).some((t) => ["create_branch", "push_files", "create_pull_request"].includes(t));
+          const hasRepoTools = allowedTools(r).some((t) => REPO_TOOLS.includes(t));
           expect(named.sort(), id(r.team, r.agent)).toEqual(hasRepoTools ? allowedRepos(r) : []);
           for (const bad of BAD_REPOS.filter((x) => x.includes('"'))) expect(put.rule).not.toContain(bad);
         }
@@ -311,10 +311,10 @@ const capRegistrationsArb = fc.array(capRegistrationArb, { maxLength: 200 });
 /** The cluster after the changes, limits included. */
 function applyAll(current: Current, changes: readonly Change[]): Current {
   const base = applyModel(current, changes);
-  const limits = new Map((current.limits ?? []).map((l) => [`${l.scope}/${l.team}/${l.agent}`, l]));
+  const limits = new Map((current.limits ?? []).map((l) => [limitId(l), l]));
   for (const c of changes) {
-    if (c.kind === "set-limit") limits.set(`${c.scope}/${c.team}/${c.agent}`, { scope: c.scope, team: c.team, agent: c.agent, tokens: c.tokens });
-    if (c.kind === "delete-limit") limits.delete(`${c.scope}/${c.team}/${c.agent}`);
+    if (c.kind === "set-limit") limits.set(limitId(c), { scope: c.scope, team: c.team, agent: c.agent, tokens: c.tokens });
+    if (c.kind === "delete-limit") limits.delete(limitId(c));
   }
   return { ...base, limits: [...limits.values()] };
 }

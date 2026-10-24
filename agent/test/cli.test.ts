@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { sendMessage, sendTurn } from "../src/a2a-client.ts";
-import { AGENT_DIR } from "./helpers.ts";
+import { AGENT_DIR, fakeBin } from "./helpers.ts";
 
 const HITL_URI = "https://kagent.dev/extensions/hitl/v1";
 
@@ -362,8 +362,7 @@ createServer((req, res) => {
 
 /** Runs the CLI with no KAGENT_URL, so it port-forwards through the fake kubectl; returns what kubectl saw. */
 async function runForwardedCli(env: Record<string, string>): Promise<{ code: number | null; stdout: string; forwardNamespace?: string; paths: string[] }> {
-  const dir = mkdtempSync(join(tmpdir(), "fake-kubectl-"));
-  writeFileSync(join(dir, "kubectl"), FAKE_KUBECTL, { mode: 0o755 });
+  const dir = fakeBin("kubectl", FAKE_KUBECTL);
   const logFile = join(dir, "log.jsonl");
   writeFileSync(logFile, "");
   const child = spawn("node", ["src/cli.ts", "--", "ping"], {

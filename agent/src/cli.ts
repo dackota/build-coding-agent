@@ -17,6 +17,7 @@ import { createServer } from "node:net";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { cancelTask, sendTurn, type StreamEvent, type Turn } from "./a2a-client.ts";
 import type { ApprovalDecision } from "./hitl.ts";
+import { TEAM_PATTERN } from "./minter/plan.ts";
 
 const CONTEXT = "kind-build-coding-agent";
 const CONTROLLER_A2A_PORT = 8083;
@@ -25,8 +26,6 @@ const DEFAULT_CONTROLLER_NAMESPACE = "kagent";
 // The agent is AGENT in namespace team-<TEAM>: today's agent, hello-agent of the platform team, by default.
 const DEFAULT_TEAM = "platform";
 const DEFAULT_AGENT = "hello-agent";
-// A team name as platform/teams.sh and the values-file schema allow it.
-const TEAM_NAME = /^[a-z]([a-z0-9-]{0,18}[a-z0-9])?$/;
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -194,7 +193,7 @@ const ARGS_PREVIEW_CHARS = 120;
 // Two namespaces: the controller's (kagent's install) for the port-forward, the agent's for its path.
 const controllerNamespace = process.env.KAGENT_NAMESPACE || DEFAULT_CONTROLLER_NAMESPACE;
 const team = process.env.TEAM || DEFAULT_TEAM;
-if (!TEAM_NAME.test(team)) fail(`TEAM ${JSON.stringify(team)} is not a team name (lower-case letters, digits and dashes)`);
+if (!TEAM_PATTERN.test(team)) fail(`TEAM ${JSON.stringify(team)} is not a team name (lower-case letters, digits and dashes)`);
 const agentNamespace = process.env.AGENT_NAMESPACE || `team-${team}`;
 const agent = process.env.AGENT || DEFAULT_AGENT;
 const forward = process.env.KAGENT_URL ? undefined : await openForward(controllerNamespace);

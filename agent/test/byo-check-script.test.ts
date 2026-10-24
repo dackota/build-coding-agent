@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { REPO_ROOT } from "./chart-helpers.ts";
+import { fakeBin } from "./helpers.ts";
 
 const SCRIPT = join(REPO_ROOT, "platform", "byo-check.sh");
 const IMAGE = "172.18.0.3:5000/my-agent@sha256:" + "a".repeat(64);
@@ -26,10 +27,7 @@ esac
 
 function run(args: string[], env: Record<string, string | undefined> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "byo-check-script-"));
-  const bin = join(dir, "bin");
-  spawnSync("mkdir", ["-p", bin]);
-  writeFileSync(join(bin, "kubectl"), KUBECTL);
-  chmodSync(join(bin, "kubectl"), 0o755);
+  const bin = fakeBin("kubectl", KUBECTL);
   writeFileSync(join(dir, "report.txt"), "PASS  1  A2A over gRPC\nbyo-check: PASSED\n");
   const res = spawnSync("bash", [SCRIPT, ...args], {
     encoding: "utf8",
