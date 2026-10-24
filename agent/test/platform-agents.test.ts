@@ -28,8 +28,8 @@ describe("platform team agents", () => {
     expect(agent.spec.egressPolicyRefs).toEqual([{ name: "git-egress" }, { name: "npm-egress" }]);
     const tools = template.spec.tools as { mcp?: { server: { name: string }; tools: string[]; requireApproval?: boolean }; subAgent?: { name: string } }[];
     expect(tools.filter((t) => t.mcp).map((t) => t.mcp)).toEqual([
-      { server: { kind: "RemoteMCPServer", name: "github-mcp" }, tools: ["create_branch", "push_files", "create_pull_request"], requireApproval: true },
-      { server: { kind: "RemoteMCPServer", name: "demo-mcp" }, tools: ["delete_branch"], requireApproval: true },
+      { server: { kind: "RemoteMCPServer", name: "hello-agent-github-mcp" }, tools: ["create_branch", "push_files", "create_pull_request"], requireApproval: true },
+      { server: { kind: "RemoteMCPServer", name: "hello-agent-demo-mcp" }, tools: ["delete_branch"], requireApproval: true },
     ]);
     expect(tools.filter((t) => t.subAgent).map((t) => t.subAgent!.name)).toEqual(["explorer", "executor", "reviewer"]);
     expect(template.spec.systemPrompt).toContain("create_pull_request");

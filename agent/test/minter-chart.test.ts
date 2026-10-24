@@ -45,7 +45,11 @@ describe("minter deployment", () => {
       expect(binding.subjects).toEqual([{ kind: "ServiceAccount", name: "minter", namespace: MINTER_NS }]);
     }
 
-    expect(rulesIn(r.objects, "agentgateway-system")).toEqual([{ apiGroups: [""], resources: ["configmaps"], resourceNames: ["agent-api-keys"], verbs: ["get", "patch"] }]);
+    // The API-key ConfigMap by name, and the agents' MCP tool policies (create cannot be limited by name).
+    expect(rulesIn(r.objects, "agentgateway-system")).toEqual([
+      { apiGroups: [""], resources: ["configmaps"], resourceNames: ["agent-api-keys"], verbs: ["get", "patch"] },
+      { apiGroups: ["agentgateway.dev"], resources: ["agentgatewaypolicies"], verbs: ["list", "create", "patch", "delete"] },
+    ]);
     for (const rule of r.objects.filter((o) => o.kind === "Role").flatMap((o) => o.rules)) {
       expect(rule.verbs).not.toContain("*");
       expect(rule.resources).not.toContain("*");
@@ -75,6 +79,8 @@ describe("minter deployment", () => {
         { name: "MINTER_TEAMS", value: "platform,payments" },
         { name: "MINTER_API_KEYS_NAMESPACE", value: "agentgateway-system" },
         { name: "MINTER_API_KEYS_CONFIGMAP", value: "agent-api-keys" },
+        { name: "MINTER_MCP_POLICY_NAMESPACE", value: "agentgateway-system" },
+        { name: "MINTER_MCP_BACKENDS", value: "github-mcp,demo-mcp" },
       ]),
     );
     expect(container.securityContext).toMatchObject({ runAsNonRoot: true, readOnlyRootFilesystem: true, allowPrivilegeEscalation: false });
