@@ -1,0 +1,280 @@
+# Spike (ticket #60): one agent calls the model and an MCP server through agentgateway with
+# its own API key, and the key never enters its actor. Applied and removed by
+# platform/spike-agent-key.sh; nothing here is part of `make up`.
+# The script fills @NODE_IMAGE@ (platform/versions.env) and @KEY_HASH@ (sha256 hex of the key
+# it makes). The key itself is never in this file: the script puts it in Secret
+# agents/spike-key-agent from stdin.
+#
+# Where things live:
+#   spike-key            the fake MCP server (one tool, spike_echo)
+#   agentgateway-system  the API-key ConfigMap, the keyed model and MCP routes, their policies
+#   agents               the agent, its ModelConfig and RemoteMCPServers (Substrate's credential
+#                        provider may read Secrets in agents only: platform/substrate-values.yaml)
+apiVersion: v1
+kind: Namespace
+metadata: {name: spike-key}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: spike-key-server, namespace: spike-key}
+data:
+  server.mjs: |
+    import { createServer } from "node:http";
+    const TOOLS = [{
+      name: "spike_echo",
+      description: "Echo the text back, prefixed with spike-echo:",
+      inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+    }];
+    function answer(rpc) {
+      switch (rpc.method) {
+        case "initialize":
+          return { protocolVersion: rpc.params?.protocolVersion ?? "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "spike-key", version: "1" } };
+        case "tools/list":
+          return { tools: TOOLS };
+        case "tools/call": {
+          const text = String(rpc.params?.arguments?.text ?? "");
+          console.log(JSON.stringify({ event: "tools-call", tool: rpc.params?.name, text }));
+          return { content: [{ type: "text", text: `spike-echo: ${text}` }], isError: false };
+        }
+        default:
+          return {};
+      }
+    }
+    createServer((req, res) => {
+      if (req.method !== "POST") return res.writeHead(405).end();
+      // The routes strip the key headers before the request gets here; say if one got through.
+      const leaked = ["x-agent-key", "authorization"].filter((h) => req.headers[h] !== undefined);
+      if (leaked.length) console.log(JSON.stringify({ event: "key-header-reached-server", headers: leaked }));
+      const chunks = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => {
+        let rpc;
+        try { rpc = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return res.writeHead(400).end(); }
+        if (rpc.id === undefined) return res.writeHead(202).end();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: answer(rpc) }));
+      });
+    }).listen(8080);
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: spike-key-server, namespace: spike-key}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: spike-key-server}}
+  template:
+    metadata: {labels: {app: spike-key-server}}
+    spec:
+      containers:
+        - name: server
+          image: "@NODE_IMAGE@"
+          command: ["node", "/srv/server.mjs"]
+          ports: [{containerPort: 8080}]
+          volumeMounts: [{name: src, mountPath: /srv}]
+          readinessProbe: {tcpSocket: {port: 8080}, periodSeconds: 2}
+      volumes:
+        - name: src
+          configMap: {name: spike-key-server}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: spike-key-server, namespace: spike-key}
+spec:
+  selector: {app: spike-key-server}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+# agentgateway's API-key ConfigMap: the key's hash only, with team and agent metadata
+# (CEL reads them as apiKey.team and apiKey.agent). Every keyed route selects it by label.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spike-key-api-keys
+  namespace: agentgateway-system
+  labels: {spike.build-coding-agent.dev/api-keys: "true"}
+data:
+  spike-key: '{"keyHash":"sha256:@KEY_HASH@","metadata":{"team":"spike","agent":"spike-key"}}'
+---
+# The model route: the opencode-go backend (platform/gateway.yaml), keyed, on its own path so
+# the open /v1 route the other agents use is untouched. The backend's own auth replaces the
+# caller's Authorization with the provider key.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: spike-key-model, namespace: agentgateway-system}
+spec:
+  parentRefs:
+  - {name: agentgateway-proxy, sectionName: http}
+  rules:
+  - matches:
+    - path: {type: PathPrefix, value: /spike-key/v1}
+    filters:
+    - type: RequestHeaderModifier
+      requestHeaderModifier:
+        set:
+        - {name: user-agent, value: build-coding-agent/0.1}
+        - {name: x-opencode-session, value: build-coding-agent}
+    backendRefs:
+    - {group: agentgateway.dev, kind: AgentgatewayBackend, name: opencode-go}
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata: {name: spike-key-model, namespace: agentgateway-system}
+spec:
+  targetRefs:
+  - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: spike-key-model}
+  traffic:
+    apiKeyAuthentication:
+      mode: Strict
+      configMapSelector:
+        matchLabels: {spike.build-coding-agent.dev/api-keys: "true"}
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata: {name: spike-key-mcp, namespace: agentgateway-system}
+spec:
+  mcp:
+    targets:
+    - name: spike
+      static: {host: spike-key-server.spike-key.svc.cluster.local, port: 8080, path: /mcp, protocol: StreamableHTTP}
+---
+# The MCP route the agent uses: the same key in header x-agent-key, not Authorization, because
+# the model binding already holds Authorization on this origin (see docs/spike-agent-key.md).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: spike-key-mcp, namespace: agentgateway-system}
+spec:
+  parentRefs:
+  - {name: agentgateway-proxy, sectionName: http}
+  rules:
+  - matches:
+    - path: {type: PathPrefix, value: /spike-key/mcp}
+    filters:
+    - type: RequestHeaderModifier
+      requestHeaderModifier:
+        remove: [x-agent-key]
+    backendRefs:
+    - {group: agentgateway.dev, kind: AgentgatewayBackend, name: spike-key-mcp}
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata: {name: spike-key-mcp, namespace: agentgateway-system}
+spec:
+  targetRefs:
+  - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: spike-key-mcp}
+  traffic:
+    apiKeyAuthentication:
+      mode: Strict
+      location:
+        header: {name: x-agent-key}
+      configMapSelector:
+        matchLabels: {spike.build-coding-agent.dev/api-keys: "true"}
+---
+# The conflict probe's MCP route: the same key as "Authorization: Bearer <key>". agentgateway
+# accepts it; the question is whether kagent lets one actor carry it beside the model binding.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: spike-key-mcp-bearer, namespace: agentgateway-system}
+spec:
+  parentRefs:
+  - {name: agentgateway-proxy, sectionName: http}
+  rules:
+  - matches:
+    - path: {type: PathPrefix, value: /spike-key/bearer-mcp}
+    filters:
+    - type: RequestHeaderModifier
+      requestHeaderModifier:
+        remove: [authorization]
+    backendRefs:
+    - {group: agentgateway.dev, kind: AgentgatewayBackend, name: spike-key-mcp}
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata: {name: spike-key-mcp-bearer, namespace: agentgateway-system}
+spec:
+  targetRefs:
+  - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: spike-key-mcp-bearer}
+  traffic:
+    apiKeyAuthentication:
+      mode: Strict
+      configMapSelector:
+        matchLabels: {spike.build-coding-agent.dev/api-keys: "true"}
+---
+# The agent's model: kagent's OpenAI client sends "Authorization: Bearer <OPENAI_API_KEY>".
+# The actor gets the placeholder; Substrate's egress gateway puts the Secret's key in.
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata: {name: spike-key, namespace: agents}
+spec:
+  provider: OpenAI
+  model: glm-5.3-flash
+  apiKeySecret: spike-key-agent
+  apiKeySecretKey: OPENAI_API_KEY
+  stream: true
+  openAI:
+    apiFormat: chatCompletions
+    baseUrl: http://agentgateway-proxy.agentgateway-system.svc.cluster.local/spike-key/v1
+---
+# The same Secret and key as the model, in header x-agent-key: a second binding on the same
+# origin with another header, so no conflict.
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata: {name: spike-key-mcp, namespace: agents}
+spec:
+  description: spike tool through agentgateway, keyed by the agent's own key
+  protocol: STREAMABLE_HTTP
+  url: http://agentgateway-proxy.agentgateway-system.svc.cluster.local/spike-key/mcp
+  headersFrom:
+    - name: x-agent-key
+      valueFrom: {type: Secret, name: spike-key-agent, key: OPENAI_API_KEY}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata: {name: spike-key, namespace: agents}
+spec:
+  description: spike agent with its own agentgateway key
+  modelConfig: {name: spike-key}
+  systemPrompt: You are a concise, helpful assistant. Reply briefly. When asked to echo, call spike_echo.
+  tools:
+    - mcp:
+        server: {kind: RemoteMCPServer, name: spike-key-mcp}
+        tools: [spike_echo]
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata: {name: spike-key, namespace: agents}
+spec:
+  template:
+    ref: {name: spike-key}
+  harnessRef: {name: kagent-stock}
+---
+# The conflict probe: the same key again on the same origin and header (Authorization), from
+# Secret spike-key-bearer ("Bearer <key>"), beside the model's binding.
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata: {name: spike-key-mcp-bearer, namespace: agents}
+spec:
+  description: spike tool, keyed by Authorization (conflict probe)
+  protocol: STREAMABLE_HTTP
+  url: http://agentgateway-proxy.agentgateway-system.svc.cluster.local/spike-key/bearer-mcp
+  headersFrom:
+    - name: Authorization
+      valueFrom: {type: Secret, name: spike-key-bearer, key: token}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata: {name: spike-key-conflict, namespace: agents}
+spec:
+  description: conflict probe, two credentials on one origin and header
+  modelConfig: {name: spike-key}
+  systemPrompt: You are a concise, helpful assistant.
+  tools:
+    - mcp:
+        server: {kind: RemoteMCPServer, name: spike-key-mcp-bearer}
+        tools: [spike_echo]
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata: {name: spike-key-conflict, namespace: agents}
+spec:
+  template:
+    ref: {name: spike-key-conflict}
+  harnessRef: {name: kagent-stock}
