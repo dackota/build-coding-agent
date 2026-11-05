@@ -1,6 +1,6 @@
 # Copied unchanged (below this header) from kagent's own kind config:
 # https://github.com/kagent-dev/kagent/blob/v1.0.0-alpha17/scripts/kind/kind-config.yaml
-# tag v1.0.0-alpha17, commit 8392184232e9c78196433a34b1fd3b33db5fcb97.
+# tag v1.0.0-alpha17, commit 8392184232e9c78196433a34b1fd3b33db5fcb97; unchanged at v1.0.0-rc2.
 # platform/cluster.sh passes --name build-coding-agent, which overrides `name` below,
 # and --image from platform/versions.env.
 ########################################################################

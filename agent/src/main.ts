@@ -5,8 +5,8 @@ import { log } from "./log.ts";
 import { startReadyz } from "./readyz.ts";
 
 const READYZ_PORT = Number(process.env.KAGENT_READYZ_PORT ?? 8081);
-// kagent's contract names 127.0.0.1:80, but on alpha17 the router's dial to that address is
-// refused ("tunnel failed"); all interfaces works.
+// kagent's contract names 127.0.0.1:80, but the router's dial to that address is refused
+// ("tunnel failed", alpha17 and rc2); all interfaces works.
 const GRPC_ADDR = process.env.KAGENT_GRPC_ADDR ?? `0.0.0.0:${process.env.KAGENT_PORT ?? 80}`;
 
 // The gRPC port opens first: once /readyz answers, Substrate resumes the actor and the

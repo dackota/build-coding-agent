@@ -18,6 +18,3 @@ providers:
     apiKeySecretKey: OPENAI_API_KEY
     config:
       baseUrl: http://agentgateway-proxy.agentgateway-system.svc.cluster.local/v1
-# Not used here, and one image fewer to pin.
-grafana-mcp:
-  enabled: false

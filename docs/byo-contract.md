@@ -65,7 +65,9 @@ message, because only a task has a record the controller can keep, publish and s
 Listen for gRPC on all interfaces, port 80 (`KAGENT_PORT` overrides the port in tests).
 
 **Why kagent needs it:** kagent's own text says `127.0.0.1:80`, but on alpha17 the router's
-dial to that address is refused ("tunnel failed"). Only `0.0.0.0` is reached.
+dial to that address is refused ("tunnel failed"). Only `0.0.0.0` is reached. Retested on rc2
+(2026-11-04): the same starter image bound to `127.0.0.1:80` got `upstream call failed:
+Connect: tunnel failed` from the router on every message, and on `0.0.0.0:80` it was reached.
 
 ## 3. Open the port before /readyz
 
@@ -83,12 +85,16 @@ Keep every task in kagent's controller, not in memory: call `TaskStoreService` (
 `updateTask` with the version last returned, `getTask`, `listTasks`) at
 `runtime.control_plane_url` from the config, with the header `authorization: Bearer
 placeholder`, and the session id from the file `/run/kagent/identity/name` (`session-<uuid>`),
-read on every call.
+read on every call. Retry `UNAVAILABLE` and `DEADLINE_EXCEEDED` for up to two minutes per call
+(100 ms doubling to 1 s, jittered), resending the same request, as kagent's own runtime does
+(kagent-dev/kagent#3391).
 
 **Why kagent needs it:** the controller is the source of truth for the conversation, and the
 actor is suspended between turns. Substrate replaces the placeholder with the actor's JWT as
 the call leaves, so the image never holds a credential. The identity is rebound when an actor
-is restored or forked, so a cached session id goes stale.
+is restored or forked, so a cached session id goes stale. A controller restart takes 30 to
+45 s, and the egress gateway answers `UNAVAILABLE` at once the whole time; a client that gives
+up sooner loses the turn's final save, and the task stays `WORKING` until someone cancels it.
 
 ## 5. Settle only at real boundaries
 
@@ -133,7 +139,8 @@ next message. See `agent/src/hitl.ts`.
 **Why kagent needs it:** the approval rule on a write tool is enforced by the image, not by
 kagent. An image that runs the call without pausing breaks the rail the values file promised.
 A pause also ends the turn, which is what lets the actor suspend while the human thinks, so
-keep the pending pause on disk (`/data`), not in memory.
+keep the pending pause on disk (`/data`), not in memory. A pause left unanswered expires with
+the Session after kagent's idle TTL (7 days by default, kagent-dev/kagent#3254).
 
 ## 9. Honor the egress trust bundle
 

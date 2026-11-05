@@ -18,5 +18,5 @@ platform needs to be useful today.
   prompt or model change is judged by hand.
 - **Observability.** Why: logs and `make status` show use against caps, but there are no traces
   or per-agent dashboards for latency, errors or spend.
-- **A2A between agents.** Why: kagent alpha17 has no agent-as-tool field and an actor may not
+- **A2A between agents.** Why: kagent (through rc2) has no agent-as-tool field and an actor may not
   call another session; see [ADR 0003](decisions/0003-a2a-and-stock-runtime.md).

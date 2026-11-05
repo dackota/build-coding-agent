@@ -67,6 +67,9 @@ pnpm --dir agent run cli -- --task T --context C --approval A --deny "use git st
 | `--approve-session` | Runs this call, and later calls of the same kind (for example, any `rm`, or any `push_files`) run with no pause in this session. |
 | `--deny "reason"` | Does not run. The model gets your reason as the tool's result. |
 
+A question or approval left unanswered expires with its session after kagent's idle TTL
+(7 days by default, kagent-dev/kagent#3254); then start a new session.
+
 ## Stop a turn
 
 Press Ctrl-C. The CLI cancels the task, prints `context=<id>`, and exits 130. The steps
@@ -102,7 +105,7 @@ AGENT=hello-agent make chat MSG="/implement https://github.com/<owner>/<repo>/is
 
 A docs-only issue gets `AGENT=docs-agent make chat MSG="/implement <url>"` instead. A
 too-big issue gets no command, only how to split it. Triage cannot call another agent on
-alpha17 (see [ADR 0003](decisions/0003-a2a-and-stock-runtime.md)), so you run the command
+kagent rc2 (see [ADR 0003](decisions/0003-a2a-and-stock-runtime.md)), so you run the command
 yourself. That also means every pause (start approval, plan sign-off) comes straight from
 the agent that pauses, and you answer it as above.
 

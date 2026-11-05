@@ -13,7 +13,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // Substrate replaces this placeholder with the calling Actor's JWT where the call leaves
 // for the controller's runtime origin (kagent's own ADK does the same).
 const AUTHORIZATION = "Bearer placeholder";
-const ATTEMPTS = 4;
+// kagent's own budget (kagent-dev/kagent#3391): outlasts a 30-45 s controller restart.
+const RETRY_BUDGET_MS = 120_000;
+const FIRST_RETRY_DELAY_MS = 100;
+const MAX_RETRY_DELAY_MS = 1_000;
 const CALL_TIMEOUT_MS = 30_000;
 const BOUNDARY_STATES = new Set<TaskState>([
   TaskState.TASK_STATE_COMPLETED,
@@ -29,6 +32,8 @@ export type ControllerTaskStoreOptions = {
   controlPlaneUrl: string;
   /** Where Substrate projects the actor's name, `session-<uuid>`. */
   identityPath: string;
+  /** How long one call keeps retrying UNAVAILABLE and DEADLINE_EXCEEDED. */
+  retryBudgetMs?: number;
 };
 
 /**
@@ -111,33 +116,43 @@ export class ControllerTaskStore implements TaskStore {
     request: Parameters<(typeof taskStoreMethods)[K]["request"]["encode"]>[0],
   ): Promise<ReturnType<(typeof taskStoreMethods)[K]["response"]["decode"]>> {
     const m = taskStoreMethods[method];
+    const budgetEnds = Date.now() + (this.opts.retryBudgetMs ?? RETRY_BUDGET_MS);
+    let delay = FIRST_RETRY_DELAY_MS;
+    let last: grpc.ServiceError | undefined;
     for (let attempt = 1; ; attempt++) {
       try {
         return await new Promise((resolve, reject) => {
           const metadata = new grpc.Metadata();
           metadata.set("authorization", AUTHORIZATION);
+          // A broken connection waits to reconnect instead of failing at once.
+          metadata.setOptions({ waitForReady: true });
           this.client.makeUnaryRequest(
             m.path,
             (v: unknown) => m.request.encode(v as never),
             (b: Buffer) => m.response.decode(b),
             request,
             metadata,
-            { deadline: Date.now() + CALL_TIMEOUT_MS },
+            { deadline: Math.max(Date.now(), Math.min(Date.now() + CALL_TIMEOUT_MS, budgetEnds)) },
             (err, res) => (err ? reject(err) : resolve(res as never)),
           );
         });
       } catch (err) {
-        const code = (err as grpc.ServiceError).code;
-        const retryable = code === grpc.status.UNAVAILABLE || code === grpc.status.DEADLINE_EXCEEDED;
-        if (!retryable || attempt >= ATTEMPTS) {
-          const details = (err as grpc.ServiceError).details ?? (err as Error).message;
-          if (code !== grpc.status.NOT_FOUND) log("task-store-failed", { method, code, details });
-          throw Object.assign(new Error(`task store ${method}: ${details}`), { code });
-        }
-        await new Promise((r) => setTimeout(r, 100 * 2 ** (attempt - 1)));
+        const e = err as grpc.ServiceError;
+        if (e.code !== grpc.status.UNAVAILABLE && e.code !== grpc.status.DEADLINE_EXCEEDED) throw failure(method, e, attempt);
+        // An attempt the budget cut short only says time ran out; the one before names the cause.
+        if (!last || Date.now() < budgetEnds) last = e;
+        await new Promise((r) => setTimeout(r, Math.max(0, Math.min(jitter(delay), budgetEnds - Date.now()))));
+        if (Date.now() >= budgetEnds) throw failure(method, last, attempt);
+        delay = Math.min(2 * delay, MAX_RETRY_DELAY_MS);
       }
     }
   }
+}
+
+function failure(method: string, err: grpc.ServiceError, attempts: number): Error {
+  const details = err.details ?? err.message;
+  if (err.code !== grpc.status.NOT_FOUND) log("task-store-failed", { method, code: err.code, details, attempts });
+  return Object.assign(new Error(`task store ${method}: ${details}`), { code: err.code });
 }
 
 /**
@@ -149,6 +164,11 @@ function isBoundary(previous: TaskState | undefined, next: TaskState): boolean {
   if (!BOUNDARY_STATES.has(next)) return false;
   const waiting = next === TaskState.TASK_STATE_INPUT_REQUIRED || next === TaskState.TASK_STATE_AUTH_REQUIRED;
   return !waiting || previous !== next;
+}
+
+/** Between half and all of delay, so runtimes that lost the controller together do not retry in step. */
+function jitter(delay: number): number {
+  return delay / 2 + Math.random() * (delay / 2);
 }
 
 function dispatchIdOf(context: ServerCallContext): string | undefined {

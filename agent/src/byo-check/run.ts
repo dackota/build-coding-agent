@@ -11,7 +11,8 @@ import { SCRIPTED_REPLY, startControllerStub, startModelStub } from "./stubs.ts"
 
 const POLL_MS = 20;
 const PROBE_TIMEOUT_MS = 500;
-const SEND_TIMEOUT_MS = 60_000;
+// Above the task store's 2-minute retry budget, so its own error surfaces first.
+const SEND_TIMEOUT_MS = 150_000;
 const SETTLE_GRACE_MS = 3_000;
 const TASK_STATE_COMPLETED = 3;
 const USER_TEXT = "What is six times seven?";

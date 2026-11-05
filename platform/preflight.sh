@@ -22,8 +22,7 @@ check_versions() {
   [ "$kind_version" = "$KIND_VERSION" ] ||
     fail "wrong kind version: found $kind_version, need $KIND_VERSION (platform/versions.env)"
   helm_version="$(helm version --template '{{.Version}}')" || fail "could not run helm version"
-  helm_major="${helm_version#v}"
-  helm_major="${helm_major%%.*}"
+  helm_major="$(helm_major)" || fail "could not run helm version"
   case " $HELM_MAJORS " in
     *" $helm_major "*) ;;
     *) fail "wrong helm version: found $helm_version, need major version one of: $HELM_MAJORS" ;;

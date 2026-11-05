@@ -6,7 +6,7 @@ import { parseAllDocuments } from "yaml";
 import { describe, expect, it } from "vitest";
 import { AGENT_CHART, find, type K8sObject, PLATFORM_DIR, render, TEAMS_CHART, valuesFile } from "./chart-helpers.ts";
 
-const WORKER = "ghcr.io/kagent-dev/substrate/ateworker-gvisor:v0.6.0-alpha3@sha256:56e6231c3ed48d54afd3068b6313a1545df1277e0ac1faa6090085cc480d573e";
+const WORKER = "ghcr.io/kagent-dev/substrate/ateworker-gvisor:v1.0.0-rc2@sha256:921de912cd9080bc13e296e5a4f758e59353fdd399d0ae97f32a471c15ccbce9";
 const NODE = "node:24-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205";
 const VALUES = {
   teams: ["platform", "payments"],

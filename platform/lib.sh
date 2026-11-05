@@ -37,6 +37,8 @@ TEAMS_SH="$PLATFORM_DIR/teams.sh"
 fail() { echo "$(basename "$0"): $*" >&2; exit 1; }
 k() { kubectl --context "$CTX" "$@"; }
 h() { helm --kube-context "$CTX" "$@"; }
+# The major version of helm on PATH, e.g. 4.
+helm_major() { local v; v="$(helm version --template '{{.Version}}')" || return 1; v="${v#v}"; echo "${v%%.*}"; }
 first_line() { printf '%s\n' "$1" | head -n 1; }
 
 # True when NAME ($1) is a whole line of the listing in $2. Callers capture listings in

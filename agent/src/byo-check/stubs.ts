@@ -27,15 +27,9 @@ export type ControllerStub = {
 };
 export type ModelStub = { requests: ModelRequest[]; close: () => Promise<void> };
 
-/** Serves TaskStoreService on host:port (port 0: any free port, read back from the stub). It keeps what the real controller enforces. */
-export async function startControllerStub(host: string, port: number, sessionId: string): Promise<ControllerStub> {
-  const calls: StubCall[] = [];
-  const tasks = new Map<string, StoredTask>();
-  const settled: { taskId: string; version: number }[] = [];
-  const boundaries = new Set<string>();
-  let refusedSettles = 0;
+/** TaskStoreService as a grpc-js service definition, keyed by method name. */
+export function taskStoreServiceDefinition(): Record<string, grpc.MethodDefinition<unknown, unknown>> {
   const definition: Record<string, grpc.MethodDefinition<unknown, unknown>> = {};
-  const handlers: grpc.UntypedServiceImplementation = {};
   for (const [name, m] of Object.entries(taskStoreMethods)) {
     definition[name] = {
       path: m.path,
@@ -46,7 +40,21 @@ export async function startControllerStub(host: string, port: number, sessionId:
       responseSerialize: (v: unknown) => m.response.encode(v as never),
       responseDeserialize: (b: Buffer) => m.response.decode(b),
     } as grpc.MethodDefinition<unknown, unknown>;
-    handlers[name] = (call: grpc.ServerUnaryCall<StoreRequest, unknown>, cb: grpc.sendUnaryData<unknown>) => {
+  }
+  return definition;
+}
+
+/** Serves TaskStoreService on host:port (port 0: any free port, read back from the stub). It keeps what the real controller enforces. */
+export async function startControllerStub(host: string, port: number, sessionId: string): Promise<ControllerStub> {
+  const calls: StubCall[] = [];
+  const tasks = new Map<string, StoredTask>();
+  const settled: { taskId: string; version: number }[] = [];
+  const boundaries = new Set<string>();
+  let refusedSettles = 0;
+  const definition = taskStoreServiceDefinition();
+  const handlers: grpc.UntypedServiceImplementation = {};
+  for (const name of Object.keys(taskStoreMethods)) {
+    handlers[name] =(call: grpc.ServerUnaryCall<StoreRequest, unknown>, cb: grpc.sendUnaryData<unknown>) => {
       const authorization = call.metadata.get("authorization")[0]?.toString();
       const req = call.request;
       calls.push({ method: name, authorization, sessionId: req.sessionId, request: { ...req } });
