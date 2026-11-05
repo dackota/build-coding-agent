@@ -1,4 +1,4 @@
-// Hand-written protobuf codecs for kagent.runtime.v1.TaskStoreService (kagent 1.0.0-alpha17,
+// Hand-written protobuf codecs for kagent.runtime.v1.TaskStoreService (kagent 1.0.0-rc2, same as alpha17,
 // proto/kagent/runtime/v1/task_store.proto). No generated TypeScript exists for it. The A2A
 // messages inside (Task, ListTasksRequest, ListTasksResponse) reuse the codecs of
 // @a2a-js/sdk's gRPC service, whose GetTask and ListTasks methods carry exactly those types.

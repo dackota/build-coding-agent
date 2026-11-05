@@ -97,7 +97,8 @@ nesting is one level deep.
 
 ## Things kagent taught us
 
-These are facts about kagent 1.0.0-alpha17 that shape the code. Do not "fix" them away.
+These are facts learned on kagent 1.0.0-alpha17 that still shape the code on 1.0.0-rc2. Do not
+"fix" them away.
 
 - **Bind `0.0.0.0:80`, not `127.0.0.1:80`.** With loopback, every message failed with
   `upstream call failed: Connect: tunnel failed`.
@@ -105,7 +106,8 @@ These are facts about kagent 1.0.0-alpha17 that shape the code. Do not "fix" the
   answers. `src/early-listener.ts` holds connections until the real server is ready.
 - **Task store auth.** Calls to kagent's `TaskStoreService` must go to
   `runtime.control_plane_url` with `Bearer placeholder`. Substrate swaps in the actor's JWT for
-  that host only. Anywhere else you get "runtime actor identity is required".
+  that host only. Anywhere else you get "runtime actor identity is required". Retry
+  `UNAVAILABLE` and `DEADLINE_EXCEEDED` for two minutes: a controller restart looks like that for 30 to 45 s.
 - **Settle only real boundaries.** Settle a task only when it ends or starts to wait.
   Otherwise the controller says "task changed".
 - **Subagents arrive as config only.** kagent puts them in `agent.sub_agents`. A `byo` image

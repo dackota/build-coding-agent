@@ -18,5 +18,5 @@ COPY extensions ./extensions
 RUN mkdir -p /data
 ENV AGENT_DATA_DIR=/data
 
-# Explicit entrypoint: kagent's byo contract is A2A over gRPC on 127.0.0.1:80 and /readyz on 8081.
+# Explicit entrypoint: A2A over gRPC on 0.0.0.0:80 and /readyz on 8081 (docs/byo-contract.md).
 ENTRYPOINT ["node", "/app/src/main.ts"]

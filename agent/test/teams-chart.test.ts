@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { find, render, TEAMS_CHART, valuesFile } from "./chart-helpers.ts";
 
 const REPO = "https://github.com/dackota/build-coding-agent.git";
-const WORKER = "ghcr.io/kagent-dev/substrate/ateworker-gvisor:v0.6.0-alpha3@sha256:56e6231c3ed48d54afd3068b6313a1545df1277e0ac1faa6090085cc480d573e";
+const WORKER = "ghcr.io/kagent-dev/substrate/ateworker-gvisor:v1.0.0-rc2@sha256:921de912cd9080bc13e296e5a4f758e59353fdd399d0ae97f32a471c15ccbce9";
 const VALUES = { teams: ["platform", "payments"], workerImage: WORKER, gitops: { repoURL: REPO, revision: "main" } };
 
 const renderTeams = (values: unknown = VALUES) => render(TEAMS_CHART, "teams", "argocd", [valuesFile(values)]);
@@ -18,6 +18,8 @@ describe("teams chart", () => {
       expect(find(r.objects, "Namespace", ns), ns).toBeDefined();
       expect(find(r.objects, "ServiceAccount", "team-default", ns), ns).toBeDefined();
       const pool = find(r.objects, "WorkerPool", "team-default", ns)!;
+      // Substrate 1.0 serves WorkerPool at ate.dev/v1 only.
+      expect(pool.apiVersion).toBe("ate.dev/v1");
       expect(pool.spec.workerImage).toBe(WORKER);
       expect(pool.spec.template).toEqual({ serviceAccountName: "team-default" });
       expect(pool.metadata.labels).toEqual({ "kagent.dev/worker-pool-name": "team-default", "kagent.dev/worker-pool-namespace": ns });

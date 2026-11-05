@@ -6,11 +6,14 @@ import { ServerCallContext } from "@a2a-js/sdk/server";
 import { afterEach, expect, it } from "vitest";
 import { ControllerTaskStore } from "../src/controller-task-store.ts";
 import type { Task } from "../src/wire.ts";
-import { type FakeController, SESSION_ID, startFakeController } from "./fake-controller.ts";
+import { type EgressProxy, type FakeController, SESSION_ID, startEgressProxy, startFakeController } from "./fake-controller.ts";
 
 let controller: FakeController | undefined;
+let proxy: EgressProxy | undefined;
 afterEach(async () => {
+  await proxy?.close();
   await controller?.close();
+  proxy = undefined;
   controller = undefined;
 });
 
@@ -33,10 +36,10 @@ function ctx(headers: Record<string, string> = {}): ServerCallContext {
   return new ServerCallContext({ state: new Map([["headers", headers]]) });
 }
 
-async function makeStore(c: FakeController, identity = `session-${SESSION_ID}\n`): Promise<ControllerTaskStore> {
+async function makeStore(c: { url: string }, identity = `session-${SESSION_ID}\n`, retryBudgetMs?: number): Promise<ControllerTaskStore> {
   const identityPath = join(mkdtempSync(join(tmpdir(), "identity-")), "name");
   writeFileSync(identityPath, identity);
-  return new ControllerTaskStore({ controlPlaneUrl: c.url, identityPath });
+  return new ControllerTaskStore({ controlPlaneUrl: c.url, identityPath, retryBudgetMs });
 }
 
 it("creates a task on its first save and updates it with the version the controller returned", async () => {
@@ -143,4 +146,35 @@ it("rejects an identity file that is not a session actor name", async () => {
   controller = await startFakeController();
   const store = await makeStore(controller, "not-a-session");
   await expect(store.save(task(TaskState.TASK_STATE_WORKING), ctx())).rejects.toThrow(/identity/i);
+});
+
+// kagent-dev/kagent#3391: a controller restart takes 30-45 s, and the egress proxy answers
+// UNAVAILABLE at once the whole time, so four quick attempts left the task WORKING.
+it("keeps retrying a save through a controller restart that outlasts four attempts", async () => {
+  controller = await startFakeController();
+  proxy = await startEgressProxy(controller);
+  const store = await makeStore(proxy);
+  proxy.setDown(true);
+
+  const saving = store.save(task(TaskState.TASK_STATE_COMPLETED), ctx()).then(() => "saved", (err: unknown) => err);
+  await new Promise((r) => setTimeout(r, 1_500));
+  proxy.setDown(false);
+  expect(await saving).toBe("saved");
+
+  expect(proxy.refused()).toBeGreaterThan(4);
+  expect(controller.tasks.get("task-1")?.version).toBe(1);
+  expect(controller.settled).toEqual([{ taskId: "task-1", version: 1 }]);
+});
+
+it("gives up with the controller's last error once the retry budget ends", async () => {
+  controller = await startFakeController();
+  proxy = await startEgressProxy(controller);
+  const store = await makeStore(proxy, `session-${SESSION_ID}\n`, 1_000);
+  proxy.setDown(true);
+
+  const started = Date.now();
+  await expect(store.save(task(TaskState.TASK_STATE_WORKING), ctx())).rejects.toThrow(/Connection refused/);
+
+  expect(Date.now() - started).toBeGreaterThanOrEqual(1_000);
+  expect(Date.now() - started).toBeLessThan(3_000);
 });

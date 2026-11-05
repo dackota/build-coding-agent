@@ -16,7 +16,7 @@ kinds the values-file chart renders.
 All resources here are `api.kagent.dev/v1alpha3` in a team's namespace, for example
 `team-platform`. kagent finds a Harness, ModelConfig, RemoteMCPServer, or EgressPolicy only
 in the agent's own namespace, so the team base puts each one in every team namespace.
-`kagent` holds only what the kagent install made. kagent is an alpha (1.0.0-alpha17), so
+`kagent` holds only what the kagent install made. kagent is a release candidate (1.0.0-rc2), so
 these shapes can change between releases. Each recipe says if this repo has run it or not.
 
 ## The four resources
@@ -254,12 +254,12 @@ handles it. Our `agent/` (the coding runtime's image) already does:
   digest, and every Application gets the pins.
 - **Human-in-the-loop:** the image must send kagent's HITL pause and read the answer.
 
-## Not supported yet on alpha17
+## Not supported yet on rc2
 
 - **One agent calling another agent over A2A.** kagent has not built this yet. A2A itself
   works for a user. The gaps: `AgentTemplate` has no agent-as-tool field (kagent comments
   out `agentRef` in `go/api/v1alpha3/agenttemplate_types.go` as "Deferred until Dedicated
   subagents can create and invoke their own Session"), and an agent's actor may not call
-  `invoke_session` on another session. Have one agent tell the user which agent and command
+  `invoke_agent` on another agent's session. Have one agent tell the user which agent and command
   to run instead. Details and what to retest on a new kagent:
   [ADR 0003](decisions/0003-a2a-and-stock-runtime.md).

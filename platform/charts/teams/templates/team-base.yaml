@@ -21,7 +21,7 @@ metadata:
   namespace: {{ $ns }}
 ---
 # Mirrors the kagent chart's WorkerPool kagent-default (templates/substrate-workerpool.yaml).
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: WorkerPool
 metadata:
   name: team-default

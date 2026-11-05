@@ -80,12 +80,17 @@ runs it. This keeps every pause on the agent that owns it and builds nothing aro
 A2A is deferred, not ruled out. Retest when a new kagent lands:
 
 - An agent reference in `AgentTemplate.spec.tools`, or anything else that fills `remote_agents`.
-- Actor permission on `invoke_session` for another agent's session.
+- Actor permission on `invoke_agent` (`invoke_session` before rc2) for another agent's session.
 - Whether a pause crosses the hop with its HITL metadata (request id and choices), so the user
   can answer it.
+
+Rechecked against the v1.0.0-rc2 source on 2026-11-04: all three are still no. rc2 renamed
+`invoke_session` to `invoke_agent` and added `list_agents` (kagent-dev/kagent#3486), but an actor
+still lists only its own Agent and may not create or send to another agent's Session
+(`go/core/internal/runtimeauth/authorizer.go`).
 
 ## Consequences
 
 - `docs/building-on-the-platform.md` lists MCP tools and subagents on the stock runtime as
-  tested, and says A2A between agents does not work on alpha17.
+  tested, and says A2A between agents does not work (alpha17 through rc2).
 - Stock-runtime agents are fine for read-only helpers (`issue_read`) and for routing advice.
